@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+</head>
+<body>
+<br>
+<input type="file" id="uploadFile" name="file"/>
+<br><br>
+<span id="uploadButton">
+  <button id="upload">Upload</button>
+</span>
+<span id="cancelButton" style="display: none;">
+  <button id="cancel" style="color: red">CANCEL</button>
+</span>
+<br>
+<br>
+Upload %:
+<output id="pct"></output>
+<br>
+<br>
+Status Messages:
+<output id="list"></output>
+</body>
+<script>
+    var blockSize = 1024 * 1024;
+    var ws = new WebSocket("ws://localhost:8084/upload");;
+    var filePos;
+    var file;
+    var reader;
+    var blob;
+    var cancel = false;
+
+    function readBlob() {
+        var first = filePos;
+        var last = first + blockSize
+        if (last > file.size) {
+            last == file.size;
+        }
+        blob = file.slice(first, last);
+        reader.readAsArrayBuffer(blob);
+    }
+
+    document.querySelector('#upload').addEventListener('click', function (evt) {
+        document.getElementById('list').innerHTML = '';
+        document.getElementById('pct').innerHTML = '';
+        filePos = 0;
+        reader = new FileReader();
+        cancel = false;
+        if (evt.target.tagName.toLowerCase() == 'button') {
+            var files = document.getElementById('uploadFile').files;
+            if (!files.length) {
+                alert('Please select a file!');
+                return;
+            }
+            file = files[0];
+            document.getElementById('uploadButton').style.display = 'none';
+            document.getElementById('cancelButton').style.display = 'block';
+            // Open and configure websocket connection.
+            ws.binaryType = 'arraybuffer';
+            // Send filename and size to the server when the connection is opened.
+            ws.onopen = function (evt) {
+
+            };
+            // Initiate the file transfer by reading the first block from disk.
+            readBlob();
+            // Send the next file block to the server once it's read from disk.
+            reader.onloadend = function (evt) {
+                if (evt.target.readyState == FileReader.DONE) {
+                    header = '{"filename":"' + file.name + '","size":' + file.size + '}';
+                    ws.send(header);
+
+                    ws.send(blob);
+                    filePos += blob.size;
+                    document.getElementById('pct').innerHTML = filePos / file.size * 100.0;
+                    if (filePos >= file.size || cancel) {
+                        document.getElementById('cancelButton').style.display = 'none';
+                        document.getElementById('uploadButton').style.display = 'block';
+                    }
+                }
+            };
+            // Process message sent from server.
+            ws.onmessage = function (e) {
+                // Server only sends text messages.
+                if (typeof e.data === "string") {
+                    // "NEXT" message confirms the server received the last block.
+                    if (e.data === "NEXT") {
+                        // If we're not cancelling the upload, read the next file block from disk.
+                        if (cancel) {
+                            document.getElementById('cancelButton').style.display = 'none';
+                            document.getElementById('uploadButton').style.display = 'block';
+                        } else {
+                            readBlob();
+                        }
+                        // Otherwise, message is a status update (json).
+                    } else {
+                        document.getElementById('list').innerHTML = '<ul>' + e.data + '</ul>';
+                    }
+                }
+            };
+            ws.onclose = function (evt) {
+                ws = null;
+            };
+            ws.onerror = function (evt) {
+                ws.close();
+                ws = null;
+                return false;
+            };
+        }
+    }, false);
+    document.querySelector('#cancel').addEventListener('click', function (evt) {
+        cancel = true;
+        ws.send("CANCEL");
+    }, false);
+</script>
+</html>
