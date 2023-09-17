@@ -5,7 +5,7 @@
 // data.
 //
 
-package ss
+package sio
 
 import (
 	"errors"
@@ -49,7 +49,7 @@ func proxy_NewPerHost(defaultDialer, bypass proxy_Dialer) *proxy_PerHost {
 }
 
 // Dial connects to the address addr on the given network through either
-// defaultDialer or bypass.
+// defaultDialer or bypasio.
 func (p *proxy_PerHost) Dial(network, addr string) (c net.Conn, err error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {

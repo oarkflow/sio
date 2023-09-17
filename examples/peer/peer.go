@@ -3,7 +3,7 @@ package main
 import (
 	"net/http"
 	
-	"github.com/oarkflow/ss/chi"
+	"github.com/oarkflow/sio/chi"
 )
 
 func main() {

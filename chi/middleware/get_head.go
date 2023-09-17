@@ -2,8 +2,8 @@ package middleware
 
 import (
 	"net/http"
-
-	"github.com/oarkflow/ss/chi"
+	
+	"github.com/oarkflow/sio/chi"
 )
 
 // GetHead automatically route undefined HEAD requests to GET handlers.
@@ -19,10 +19,10 @@ func GetHead(next http.Handler) http.Handler {
 					routePath = r.URL.Path
 				}
 			}
-
+			
 			// Temporary routing context to look-ahead before routing the request
 			tctx := chi.NewRouteContext()
-
+			
 			// Attempt to find a HEAD handler for the routing path, if not found, traverse
 			// the router as through its a GET route, but proceed with the request
 			// with the HEAD method.
@@ -33,7 +33,7 @@ func GetHead(next http.Handler) http.Handler {
 				return
 			}
 		}
-
+		
 		next.ServeHTTP(w, r)
 	})
 }

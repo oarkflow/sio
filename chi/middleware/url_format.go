@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
-
-	"github.com/oarkflow/ss/chi"
+	
+	"github.com/oarkflow/sio/chi"
 )
 
 var (
@@ -46,29 +46,29 @@ var (
 func URLFormat(next http.Handler) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-
+		
 		var format string
 		path := r.URL.Path
-
+		
 		rctx := chi.RouteContext(r.Context())
 		if rctx != nil && rctx.RoutePath != "" {
 			path = rctx.RoutePath
 		}
-
+		
 		if strings.Index(path, ".") > 0 {
 			base := strings.LastIndex(path, "/")
 			idx := strings.LastIndex(path[base:], ".")
-
+			
 			if idx > 0 {
 				idx += base
 				format = path[idx+1:]
-
+				
 				rctx.RoutePath = path[:idx]
 			}
 		}
-
+		
 		r = r.WithContext(context.WithValue(ctx, URLFormatCtxKey, format))
-
+		
 		next.ServeHTTP(w, r)
 	}
 	return http.HandlerFunc(fn)

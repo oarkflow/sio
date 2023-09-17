@@ -3,8 +3,8 @@ package middleware
 import (
 	"net/http"
 	"path"
-
-	"github.com/oarkflow/ss/chi"
+	
+	"github.com/oarkflow/sio/chi"
 )
 
 // CleanPath middleware will clean out double slash mistakes from a user's request path.
@@ -12,7 +12,7 @@ import (
 func CleanPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rctx := chi.RouteContext(r.Context())
-
+		
 		routePath := rctx.RoutePath
 		if routePath == "" {
 			if r.URL.RawPath != "" {
@@ -22,7 +22,7 @@ func CleanPath(next http.Handler) http.Handler {
 			}
 			rctx.RoutePath = path.Clean(routePath)
 		}
-
+		
 		next.ServeHTTP(w, r)
 	})
 }

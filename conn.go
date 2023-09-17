@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package ss
+package sio
 
 import (
 	"bufio"
@@ -344,12 +344,12 @@ func (c *Conn) Close() error {
 	return c.conn.Close()
 }
 
-// LocalAddr returns the local network address.
+// LocalAddr returns the local network addresio.
 func (c *Conn) LocalAddr() net.Addr {
 	return c.conn.LocalAddr()
 }
 
-// RemoteAddr returns the remote network address.
+// RemoteAddr returns the remote network addresio.
 func (c *Conn) RemoteAddr() net.Addr {
 	return c.conn.RemoteAddr()
 }

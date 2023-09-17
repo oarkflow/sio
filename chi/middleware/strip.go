@@ -3,8 +3,8 @@ package middleware
 import (
 	"fmt"
 	"net/http"
-
-	"github.com/oarkflow/ss/chi"
+	
+	"github.com/oarkflow/sio/chi"
 )
 
 // StripSlashes is a middleware that will match request paths with a trailing

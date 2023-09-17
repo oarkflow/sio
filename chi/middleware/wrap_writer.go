@@ -11,12 +11,12 @@ import (
 )
 
 // NewWrapResponseWriter wraps an http.ResponseWriter, returning a proxy that allows you to
-// hook into various parts of the response process.
+// hook into various parts of the response procesio.
 func NewWrapResponseWriter(w http.ResponseWriter, protoMajor int) WrapResponseWriter {
 	_, fl := w.(http.Flusher)
-
+	
 	bw := basicWriter{ResponseWriter: w}
-
+	
 	if protoMajor == 2 {
 		_, ps := w.(http.Pusher)
 		if fl && ps {
@@ -35,16 +35,16 @@ func NewWrapResponseWriter(w http.ResponseWriter, protoMajor int) WrapResponseWr
 			return &hijackWriter{bw}
 		}
 	}
-
+	
 	if fl {
 		return &flushWriter{bw}
 	}
-
+	
 	return &bw
 }
 
 // WrapResponseWriter is a proxy around an http.ResponseWriter that allows you to hook
-// into various parts of the response process.
+// into various parts of the response procesio.
 type WrapResponseWriter interface {
 	http.ResponseWriter
 	// Status returns the HTTP status of the request, or 0 if one has not

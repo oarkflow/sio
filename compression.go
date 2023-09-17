@@ -5,7 +5,7 @@
 // This file may have been modified by CloudWeGo authors. All CloudWeGo
 // Modifications are Copyright 2022 CloudWeGo Authors.
 
-package ss
+package sio
 
 import (
 	"compress/flate"

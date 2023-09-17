@@ -1,4 +1,4 @@
-package ss
+package sio
 
 type hub struct {
 	sockets          map[string]*Socket
@@ -73,12 +73,12 @@ func (h *hub) setMultihomeBackend(b Adapter) {
 	if h.multihomeEnabled {
 		return //can't have two backends... yet
 	}
-
+	
 	h.multihomeBackend = b
 	h.multihomeEnabled = true
-
+	
 	h.multihomeBackend.Init()
-
+	
 	go h.multihomeBackend.BroadcastFromBackend(h.bbroadcastCh)
 	go h.multihomeBackend.RoomcastFromBackend(h.broomcastCh)
 }
@@ -154,8 +154,8 @@ func newHub() *hub {
 		bbroadcastCh:     make(chan *BroadcastMsg),
 		multihomeEnabled: false,
 	}
-
+	
 	go h.listen()
-
+	
 	return h
 }

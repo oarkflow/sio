@@ -5,7 +5,7 @@
 //go:build !appengine
 // +build !appengine
 
-package ss
+package sio
 
 import "unsafe"
 

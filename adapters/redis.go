@@ -9,13 +9,13 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/oarkflow/ss"
+	"github.com/oarkflow/sio"
 )
 
-var rng *ss.RNG
+var rng *sio.RNG
 
 func init() {
-	rng = ss.NewRNG()
+	rng = sio.NewRNG()
 }
 
 const (
@@ -23,8 +23,8 @@ const (
 	DefServerGroup = "ss-rmhb-group-default"
 )
 
-// RedisAdapter implements the ss.Adapter interface and uses
-// Redis to syncronize between multiple machines running ss.Server
+// RedisAdapter implements the sio.Adapter interface and uses
+// Redis to syncronize between multiple machines running sio.Server
 type RedisAdapter struct {
 	r           *redis.Client
 	o           *Options
@@ -37,7 +37,7 @@ type RedisAdapter struct {
 
 type Options struct {
 
-	//ServerName is a unique name for the ss.Adapter instance.
+	//ServerName is a unique name for the sio.Adapter instance.
 	//This name must be unique per backend instance or the backend
 	//will not broadcast and roomcast properly.
 	//
@@ -46,7 +46,7 @@ type Options struct {
 
 	//ServerGroup is the server pool name that this instance's broadcasts
 	//and roomcasts will be published to. This can be used to break up
-	//ss.Adapter instances into separate domains.
+	//sio.Adapter instances into separate domains.
 	//
 	//Leave this empty to use the default group "ss-rmhb-group-default"
 	ServerGroup string
@@ -93,7 +93,7 @@ func NewRedisAdapter(ctx context.Context, rOpts *redis.Options, ssrOpts *Options
 	return rmhb, nil
 }
 
-// Init is just here to satisfy the ss.Adapter interface.
+// Init is just here to satisfy the sio.Adapter interface.
 func (r *RedisAdapter) Init() {
 
 }
@@ -112,7 +112,7 @@ func (r *RedisAdapter) Shutdown() error {
 }
 
 // BroadcastToBackend will publish a broadcast message to the redis backend
-func (r *RedisAdapter) BroadcastToBackend(b *ss.BroadcastMsg) {
+func (r *RedisAdapter) BroadcastToBackend(b *sio.BroadcastMsg) {
 	t := &transmission{
 		ServerName: r.o.ServerName,
 		EventName:  b.EventName,
@@ -132,7 +132,7 @@ func (r *RedisAdapter) BroadcastToBackend(b *ss.BroadcastMsg) {
 }
 
 // RoomcastToBackend will publish a roomcast message to the redis backend
-func (r *RedisAdapter) RoomcastToBackend(rm *ss.RoomMsg) {
+func (r *RedisAdapter) RoomcastToBackend(rm *sio.RoomMsg) {
 	t := &transmission{
 		ServerName: r.o.ServerName,
 		EventName:  rm.EventName,
@@ -153,7 +153,7 @@ func (r *RedisAdapter) RoomcastToBackend(rm *ss.RoomMsg) {
 }
 
 // BroadcastFromBackend will receive broadcast messages from redis and propogate them to the neccessary sockets
-func (r *RedisAdapter) BroadcastFromBackend(bc chan<- *ss.BroadcastMsg) {
+func (r *RedisAdapter) BroadcastFromBackend(bc chan<- *sio.BroadcastMsg) {
 	bChan := r.bps.Channel()
 
 	for d := range bChan {
@@ -169,7 +169,7 @@ func (r *RedisAdapter) BroadcastFromBackend(bc chan<- *ss.BroadcastMsg) {
 			continue
 		}
 
-		bc <- &ss.BroadcastMsg{
+		bc <- &sio.BroadcastMsg{
 			EventName: t.EventName,
 			Data:      t.Data,
 		}
@@ -177,7 +177,7 @@ func (r *RedisAdapter) BroadcastFromBackend(bc chan<- *ss.BroadcastMsg) {
 }
 
 // RoomcastFromBackend will receive roomcast messages from redis and propogate them to the neccessary sockets
-func (r *RedisAdapter) RoomcastFromBackend(rc chan<- *ss.RoomMsg) {
+func (r *RedisAdapter) RoomcastFromBackend(rc chan<- *sio.RoomMsg) {
 	rChan := r.rps.Channel()
 
 	for d := range rChan {
@@ -193,7 +193,7 @@ func (r *RedisAdapter) RoomcastFromBackend(rc chan<- *ss.RoomMsg) {
 			continue
 		}
 
-		rc <- &ss.RoomMsg{
+		rc <- &sio.RoomMsg{
 			EventName: t.EventName,
 			RoomName:  t.RoomName,
 			Data:      t.Data,

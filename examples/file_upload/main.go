@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 	
-	"github.com/oarkflow/ss"
-	"github.com/oarkflow/ss/chi"
+	"github.com/oarkflow/sio"
+	"github.com/oarkflow/sio/chi"
 )
 
 const HandshakeTimeoutSecs = 10
@@ -27,7 +27,7 @@ type UploadStatus struct {
 }
 
 type wsConn struct {
-	conn *ss.Conn
+	conn *sio.Conn
 }
 
 func upload(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +35,7 @@ func upload(w http.ResponseWriter, r *http.Request) {
 	var err error
 	
 	// Open websocket connection.
-	upgrader := ss.Upgrader{HandshakeTimeout: time.Second * HandshakeTimeoutSecs}
+	upgrader := sio.Upgrader{HandshakeTimeout: time.Second * HandshakeTimeoutSecs}
 	wsc.conn, err = upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		fmt.Println("Error on open of websocket connection:", err)
@@ -50,7 +50,7 @@ func upload(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("Error receiving websocket message:", err)
 		return
 	}
-	if mt != ss.TextMessage {
+	if mt != sio.TextMessage {
 		wsc.sendStatus(400, "Invalid message received, expecting file name and length")
 		return
 	}
@@ -87,8 +87,8 @@ func upload(w http.ResponseWriter, r *http.Request) {
 			wsc.sendStatus(400, "Error receiving file block: "+err.Error())
 			return
 		}
-		if mt != ss.BinaryMessage {
-			if mt == ss.TextMessage {
+		if mt != sio.BinaryMessage {
+			if mt == sio.TextMessage {
 				if string(message) == "CANCEL" {
 					wsc.sendStatus(400, "Upload canceled")
 					return
@@ -120,12 +120,12 @@ func upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (wsc wsConn) requestNextBlock() {
-	wsc.conn.WriteMessage(ss.TextMessage, []byte("NEXT"))
+	wsc.conn.WriteMessage(sio.TextMessage, []byte("NEXT"))
 }
 
 func (wsc wsConn) sendStatus(code int, status string) {
 	if msg, err := json.Marshal(UploadStatus{Code: code, Status: status}); err == nil {
-		wsc.conn.WriteMessage(ss.TextMessage, msg)
+		wsc.conn.WriteMessage(sio.TextMessage, msg)
 	}
 }
 
@@ -133,7 +133,7 @@ func (wsc wsConn) sendPct(pct int) {
 	stat := UploadStatus{pct: pct}
 	stat.Pct = &stat.pct
 	if msg, err := json.Marshal(stat); err == nil {
-		wsc.conn.WriteMessage(ss.TextMessage, msg)
+		wsc.conn.WriteMessage(sio.TextMessage, msg)
 	}
 }
 

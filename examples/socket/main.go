@@ -10,9 +10,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-
-	"github.com/oarkflow/ss"
-	"github.com/oarkflow/ss/chi"
+	
+	"github.com/oarkflow/sio"
+	"github.com/oarkflow/sio/chi"
 )
 
 type roomcast struct {
@@ -36,9 +36,9 @@ var (
 func main() {
 	flag.Parse()
 	srv := chi.NewRouter()
-	s := ss.New()
+	s := sio.New()
 	var err error
-
+	
 	s.On("echo", Echo)
 	s.On("echobin", EchoBin)
 	s.On("echojson", EchoJSON)
@@ -50,11 +50,11 @@ func main() {
 	s.On("broadcast", Broadcast)
 	s.On("broadcastbin", BroadcastBin)
 	s.On("broadcastjson", BroadcastJSON)
-	s.OnConnect(func(socket *ss.Socket) error {
+	s.OnConnect(func(socket *sio.Socket) error {
 		fmt.Println("Connected", socket.ID())
 		return nil
 	})
-	s.OnDisconnect(func(socket *ss.Socket) error {
+	s.OnDisconnect(func(socket *sio.Socket) error {
 		fmt.Println("Disconnected")
 		return nil
 	})
@@ -63,101 +63,101 @@ func main() {
 		Password: *pass,
 		DB:       *db,
 	}, nil)
-
+	
 	if err != nil {
 		log.Fatal(err)
 	}
-
+	
 	s.SetMultihomeBackend(b)*/
-
+	
 	c := make(chan bool)
 	s.EnableSignalShutdown(c)
-
+	
 	go func() {
 		<-c
 		os.Exit(0)
 	}()
-
+	
 	srv.Handle("/socket", s)
 	srv.Mount("/", http.FileServer(http.Dir("webroot")))
-
+	
 	if *cert == "" || *key == "" {
 		slog.Info(fmt.Sprintf("Listening on http://localhost%s", *webPort))
 		err = http.ListenAndServe(*webPort, srv)
 	} else {
 		err = http.ListenAndServeTLS(*webPort, *cert, *key, srv)
 	}
-
+	
 	if err != nil {
 		slog.Error(err.Error())
 	}
 }
 
-func Echo(s *ss.Socket, data []byte) {
+func Echo(s *sio.Socket, data []byte) {
 	_ = s.Emit("echo", string(data))
 }
 
-func EchoBin(s *ss.Socket, data []byte) {
+func EchoBin(s *sio.Socket, data []byte) {
 	_ = s.Emit("echobin", data)
 }
 
-func EchoJSON(s *ss.Socket, data []byte) {
+func EchoJSON(s *sio.Socket, data []byte) {
 	var m message
 	err := json.Unmarshal(data, &m)
 	check(err)
-
+	
 	_ = s.Emit("echojson", m)
 }
 
-func Join(s *ss.Socket, data []byte) {
+func Join(s *sio.Socket, data []byte) {
 	d := string(data)
 	s.Join(d)
 	_ = s.Emit("echo", "joined room:"+d)
 }
 
-func Leave(s *ss.Socket, data []byte) {
+func Leave(s *sio.Socket, data []byte) {
 	d := string(data)
 	s.Leave(d)
 	_ = s.Emit("echo", "left room:"+d)
 }
 
-func Roomcast(s *ss.Socket, data []byte) {
+func Roomcast(s *sio.Socket, data []byte) {
 	var r roomcast
 	err := json.Unmarshal(data, &r)
 	check(err)
-
+	
 	s.ToRoom(r.Room, "roomcast", r.Data)
 }
 
-func RoomcastBin(s *ss.Socket, data []byte) {
+func RoomcastBin(s *sio.Socket, data []byte) {
 	var r roomcast
 	err := json.Unmarshal(data, &r)
 	check(err)
-
+	
 	s.ToRoom(r.Room, "roomcastbin", []byte(r.Data))
 }
 
-func RoomcastJSON(s *ss.Socket, data []byte) {
+func RoomcastJSON(s *sio.Socket, data []byte) {
 	var r roomcast
 	err := json.Unmarshal(data, &r)
 	check(err)
-
+	
 	s.ToRoom(r.Room, "roomcastjson", r)
 }
 
-func Broadcast(s *ss.Socket, data []byte) {
+func Broadcast(s *sio.Socket, data []byte) {
 	s.Broadcast("broadcast", string(data))
 }
 
-func BroadcastBin(s *ss.Socket, data []byte) {
+func BroadcastBin(s *sio.Socket, data []byte) {
 	s.Broadcast("broadcastbin", data)
 }
 
-func BroadcastJSON(s *ss.Socket, data []byte) {
+func BroadcastJSON(s *sio.Socket, data []byte) {
 	var m message
 	err := json.Unmarshal(data, &m)
 	check(err)
-
+	
 	s.Broadcast("broadcastjson", m)
 }
 

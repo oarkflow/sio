@@ -1,3 +1,3 @@
-module github.com/oarkflow/ss
+module github.com/oarkflow/sio
 
 go 1.21.0
