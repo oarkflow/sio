@@ -1,5 +1,7 @@
 package adapters
 
+/*
+
 import (
 	"context"
 	"encoding/hex"
@@ -198,3 +200,4 @@ func (r *RedisAdapter) RoomcastFromBackend(rc chan<- *ss.RoomMsg) {
 		}
 	}
 }
+*/
