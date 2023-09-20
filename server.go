@@ -14,10 +14,10 @@ import (
 )
 
 const ( //                        ASCII chars
-	startOfHeaderByte uint8 = 1 //SOH
-	startOfDataByte         = 2 //STX
+	startOfHeaderByte uint8 = 1 // SOH
+	startOfDataByte         = 2 // STX
 
-	//SubProtocol is the official sacrificial-socket sub protocol
+	// SubProtocol is the official sacrificial-socket sub protocol
 	SubProtocol string = "sac-sock"
 )
 
@@ -111,7 +111,7 @@ func (serv *Server) EnableSignalShutdown(complete chan<- bool) {
 // method on any Adapter that is currently set.
 func (serv *Server) Shutdown() bool {
 	slog.Info("shutting down")
-	//complete := serv.hub.shutdown()
+	// complete := serv.hub.shutdown()
 
 	serv.hub.shutdownCh <- true
 	socketList := <-serv.hub.socketList
@@ -142,7 +142,7 @@ type EventHandler interface {
 // Any event functions registered with On, must be safe for concurrent use by multiple
 // go routines
 func (serv *Server) On(eventName string, handleFunc func(*Socket, []byte)) {
-	serv.events[eventName] = &event{eventName, handleFunc} //you think you can handle the func?
+	serv.events[eventName] = &event{eventName, handleFunc} // you think you can handle the func?
 }
 
 // OnEvent has the same functionality as On, but accepts
@@ -191,6 +191,9 @@ func (serv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func DefaultUpgrader() *Upgrader {
 	return &Upgrader{
 		Subprotocols: []string{SubProtocol},
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
 	}
 }
 
@@ -286,7 +289,7 @@ func (serv *Server) loop(ws *Conn, r *http.Request) {
 }
 
 func ignorableError(err error) bool {
-	//not an error
+	// not an error
 	if err == nil {
 		return false
 	}

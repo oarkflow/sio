@@ -13,6 +13,7 @@ import (
 
 	"github.com/oarkflow/sio"
 	"github.com/oarkflow/sio/chi"
+	"github.com/oarkflow/sio/internal/maps"
 )
 
 type roomcast struct {
@@ -36,68 +37,113 @@ var (
 func main() {
 	flag.Parse()
 	srv := chi.NewRouter()
-	s := sio.New(sio.Config{
+	server := sio.New(sio.Config{
 		CheckOrigin: func(r *http.Request) bool {
 			return true
 		},
 		EnableCompression: true,
 	})
 	var err error
-	s.On("request:login", func(socket *sio.Socket, data []byte) {
+	server.On("request:login", func(socket *sio.Socket, data []byte) {
 		d := string(data)
 		fmt.Println("Login", d)
 	})
-	s.On("join", func(s *sio.Socket, data []byte) {
+	server.On("join", func(s *sio.Socket, data []byte) {
 		var room map[string]any
+		var curRoom *maps.Map[string, map[string]any]
 		err := json.Unmarshal(data, &room)
 		if err == nil {
 			if v, exists := room["room_id"]; exists {
-				s.Join(v.(string))
+				roomID := v.(string)
+				if vt, e := GetRoomByID(roomID); e {
+					curRoom = vt
+					curRoom.Put(s.ID(), room)
+				} else {
+					curRoom = maps.New[string, map[string]any](10000)
+					curRoom.Put(s.ID(), room)
+					AddRoom(roomID, curRoom)
+				}
+				s.Join(roomID)
+				var connections []map[string]any
+				curRoom.Iter(func(key string, val map[string]any) bool {
+					connections = append(connections, val)
+					return true
+				})
 				d := string(data)
-				fmt.Println("joining", d)
-				s.ToRoomExcept(v.(string), []string{s.ID()}, "action:peer-room-joined", d)
+				s.ToRoomExcept(roomID, []string{s.ID()}, "action:peer-joined", d)
 				s.Emit("action:room-joined", d)
+				cons, err := json.Marshal(connections)
+				if err == nil {
+					s.Emit("action:peer-connections", string(cons))
+				}
 			}
 		}
 	})
-	s.On("request:send-message", func(socket *sio.Socket, data []byte) {
+	server.On("request:send-message", func(socket *sio.Socket, data []byte) {
 		var room map[string]any
 		err := json.Unmarshal(data, &room)
 		if err == nil {
 			if v, exists := room["room_id"]; exists {
-				s.ToRoomExcept(v.(string), []string{socket.ID()}, "action:message-received", room)
+				server.ToRoomExcept(v.(string), []string{socket.ID()}, "action:message-received", room)
 			}
 		}
 	})
-	s.On("request:typing-start", func(socket *sio.Socket, data []byte) {
+	server.On("request:typing-start", func(socket *sio.Socket, data []byte) {
 		var room map[string]any
 		err := json.Unmarshal(data, &room)
 		if err == nil {
 			if v, exists := room["room_id"]; exists {
-				s.ToRoomExcept(v.(string), []string{socket.ID()}, "action:peer-typing-start", room)
+				server.ToRoomExcept(v.(string), []string{socket.ID()}, "action:peer-typing-start", room)
 			}
 		}
 	})
-	s.On("request:typing-stopped", func(socket *sio.Socket, data []byte) {
+	server.On("request:typing-stopped", func(socket *sio.Socket, data []byte) {
 		var room map[string]any
 		err := json.Unmarshal(data, &room)
 		if err == nil {
 			if v, exists := room["room_id"]; exists {
-				s.ToRoomExcept(v.(string), []string{socket.ID()}, "action:peer-typing-stop", room)
+				server.ToRoomExcept(v.(string), []string{socket.ID()}, "action:peer-typing-stop", room)
 			}
 		}
 	})
-	s.On("leave", func(s *sio.Socket, data []byte) {
+	server.On("leave", func(s *sio.Socket, data []byte) {
 		d := string(data)
 		s.Leave(d)
+		if room, exists := GetRoomByID(d); exists {
+			var connections []map[string]any
+			room.Iter(func(key string, val map[string]any) bool {
+				connections = append(connections, val)
+				return true
+			})
+			cons, err := json.Marshal(connections)
+			if err == nil {
+				s.ToRoom(d, "action:peer-connections", string(cons))
+			}
+		}
 		_ = s.Emit("echo", "left room:"+d)
 	})
-	s.OnConnect(func(socket *sio.Socket) error {
+	server.OnConnect(func(socket *sio.Socket) error {
 		fmt.Println("Connected", socket.ID())
 		return nil
 	})
-	s.OnDisconnect(func(socket *sio.Socket) error {
+	server.OnDisconnect(func(socket *sio.Socket) error {
 		fmt.Println("Disconnected")
+		rooms := make(map[string][]map[string]any)
+		GetRooms().Iter(func(roomID string, users *maps.Map[string, map[string]any]) bool {
+			room, _ := rooms[roomID]
+			if user, ok := users.Get(socket.ID()); ok {
+				room = append(room, user)
+				users.Delete(socket.ID())
+			}
+			rooms[roomID] = room
+			return true
+		})
+		for roomID, connections := range rooms {
+			cons, err := json.Marshal(connections)
+			if err == nil {
+				server.ToRoom(roomID, "action:peer-connections-closed", string(cons))
+			}
+		}
 		return nil
 	})
 	/*b, err := adapters.NewRedisAdapter(context.Background(), &redis.Options{
@@ -110,17 +156,17 @@ func main() {
 		log.Fatal(err)
 	}
 
-	s.SetMultihomeBackend(b)*/
+	server.SetMultihomeBackend(b)*/
 
 	c := make(chan bool)
-	s.EnableSignalShutdown(c)
+	server.EnableSignalShutdown(c)
 
 	go func() {
 		<-c
 		os.Exit(0)
 	}()
 
-	srv.Handle("/socket", s)
+	srv.Handle("/socket", server)
 	srv.Mount("/", http.FileServer(http.Dir("webroot")))
 
 	if *cert == "" || *key == "" {
