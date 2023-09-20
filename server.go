@@ -10,12 +10,13 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const ( //                        ASCII chars
 	startOfHeaderByte uint8 = 1 //SOH
 	startOfDataByte         = 2 //STX
-	
+
 	//SubProtocol is the official sacrificial-socket sub protocol
 	SubProtocol string = "sac-sock"
 )
@@ -23,6 +24,20 @@ const ( //                        ASCII chars
 type event struct {
 	eventName    string
 	eventHandler func(*Socket, []byte)
+}
+
+// Config specifies parameters for upgrading an HTTP connection to a
+// WebSocket connection.
+//
+// It is safe to call Config's methods concurrently.
+type Config struct {
+	HandshakeTimeout                time.Duration
+	ReadBufferSize, WriteBufferSize int
+	WriteBufferPool                 BufferPool
+	Subprotocols                    []string
+	Error                           func(w http.ResponseWriter, r *http.Request, status int, reason error)
+	CheckOrigin                     func(r *http.Request) bool
+	EnableCompression               bool
 }
 
 // Server manages the coordination between
@@ -39,14 +54,38 @@ type Server struct {
 }
 
 // New creates a new instance of Server
-func New() *Server {
+func New(cfg ...Config) *Server {
+	var config Config
+	upgrader := DefaultUpgrader()
+	if len(cfg) > 0 {
+		config = cfg[0]
+	}
+	if config.CheckOrigin != nil {
+		upgrader.CheckOrigin = config.CheckOrigin
+	}
+	if config.HandshakeTimeout != 0 {
+		upgrader.HandshakeTimeout = config.HandshakeTimeout
+	}
+	if config.ReadBufferSize != 0 {
+		upgrader.ReadBufferSize = config.ReadBufferSize
+	}
+	if config.WriteBufferSize != 0 {
+		upgrader.WriteBufferSize = config.WriteBufferSize
+	}
+	if len(config.Subprotocols) > 0 {
+		upgrader.Subprotocols = config.Subprotocols
+	}
+	if config.Error != nil {
+		upgrader.Error = config.Error
+	}
+	upgrader.EnableCompression = config.EnableCompression
 	s := &Server{
 		hub:      newHub(),
 		events:   make(map[string]*event),
 		l:        &sync.RWMutex{},
-		upgrader: DefaultUpgrader(),
+		upgrader: upgrader,
 	}
-	
+
 	return s
 }
 
@@ -61,7 +100,7 @@ func (serv *Server) EnableSignalShutdown(complete chan<- bool) {
 		syscall.SIGTERM,
 		syscall.SIGQUIT,
 		syscall.SIGKILL)
-	
+
 	go func() {
 		<-c
 		complete <- serv.Shutdown()
@@ -73,20 +112,20 @@ func (serv *Server) EnableSignalShutdown(complete chan<- bool) {
 func (serv *Server) Shutdown() bool {
 	slog.Info("shutting down")
 	//complete := serv.hub.shutdown()
-	
+
 	serv.hub.shutdownCh <- true
 	socketList := <-serv.hub.socketList
-	
+
 	for _, s := range socketList {
 		s.Close()
 	}
-	
+
 	if serv.hub.multihomeEnabled {
 		slog.Info("shutting down multihome backend")
 		serv.hub.multihomeBackend.Shutdown()
 		slog.Info("backend shutdown")
 	}
-	
+
 	slog.Info("shutdown")
 	return true
 }
@@ -150,11 +189,9 @@ func (serv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // DefaultUpgrader returns a websocket upgrader suitable for creating sacrificial-socket websockets.
 func DefaultUpgrader() *Upgrader {
-	u := &Upgrader{
+	return &Upgrader{
 		Subprotocols: []string{SubProtocol},
 	}
-	
-	return u
 }
 
 // SetUpgrader sets the websocket.Upgrader used by the Server.
@@ -169,12 +206,22 @@ func (serv *Server) SetMultihomeBackend(b Adapter) {
 
 // ToRoom dispatches an event to all Sockets in the specified room.
 func (serv *Server) ToRoom(roomName, eventName string, data any) {
-	serv.hub.toRoom(&RoomMsg{roomName, eventName, data})
+	serv.hub.toRoom(&RoomMsg{RoomName: roomName, EventName: eventName, Data: data})
+}
+
+// ToRoomExcept dispatches an event to all Sockets in the specified room.
+func (serv *Server) ToRoomExcept(roomName string, except []string, eventName string, data any) {
+	serv.hub.toRoom(&RoomMsg{RoomName: roomName, EventName: eventName, Data: data, Except: except})
 }
 
 // Broadcast dispatches an event to all Sockets on the Server.
 func (serv *Server) Broadcast(eventName string, data any) {
-	serv.hub.broadcast(&BroadcastMsg{eventName, data})
+	serv.hub.broadcast(&BroadcastMsg{EventName: eventName, Data: data})
+}
+
+// BroadcastExcept dispatches an event to all Sockets on the Server.
+func (serv *Server) BroadcastExcept(eventName string, except []string, data any) {
+	serv.hub.broadcast(&BroadcastMsg{EventName: eventName, Except: except, Data: data})
 }
 
 // ToSocket dispatches an event to the specified socket ID.
@@ -187,22 +234,22 @@ func (serv *Server) ToSocket(socketID, eventName string, data any) {
 func (serv *Server) loop(ws *Conn, r *http.Request) {
 	s := newSocket(serv, ws, r)
 	slog.Info("connected", "id", s.ID())
-	
+
 	defer s.Close()
-	
+
 	s.Join("__socket_id:" + s.ID())
-	
+
 	serv.l.RLock()
 	e := serv.onConnectFunc
 	serv.l.RUnlock()
-	
+
 	if e != nil {
 		err := e(s)
 		if err != nil && serv.onError != nil {
 			serv.onError(s, err)
 		}
 	}
-	
+
 	for {
 		msg, err := s.receive()
 		if ignorableError(err) {
@@ -212,10 +259,10 @@ func (serv *Server) loop(ws *Conn, r *http.Request) {
 			slog.Error(err.Error())
 			return
 		}
-		
+
 		eventName := ""
 		contentIdx := 0
-		
+
 		for idx, chr := range msg {
 			if chr == startOfDataByte {
 				eventName = string(msg[:idx])
@@ -227,11 +274,11 @@ func (serv *Server) loop(ws *Conn, r *http.Request) {
 			slog.Warn("no event to dispatch")
 			continue
 		}
-		
+
 		serv.l.RLock()
 		e, exists := serv.events[eventName]
 		serv.l.RUnlock()
-		
+
 		if exists {
 			go e.eventHandler(s, msg[contentIdx:])
 		}
@@ -243,7 +290,7 @@ func ignorableError(err error) bool {
 	if err == nil {
 		return false
 	}
-	
+
 	return err == io.EOF ||
 		IsCloseError(err, 1000) ||
 		IsCloseError(err, 1001) ||

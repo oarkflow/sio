@@ -1,5 +1,9 @@
 package sio
 
+import (
+	"slices"
+)
+
 type hub struct {
 	sockets          map[string]*Socket
 	rooms            map[string]*room
@@ -35,6 +39,7 @@ type leaveRequest struct {
 // RoomMsg represents an event to be dispatched to a room of sockets
 type RoomMsg struct {
 	RoomName  string
+	Except    []string
 	EventName string
 	Data      any
 }
@@ -42,6 +47,7 @@ type RoomMsg struct {
 // BroadcastMsg represents an event to be dispatched to all Sockets on the Server
 type BroadcastMsg struct {
 	EventName string
+	Except    []string
 	Data      any
 }
 
@@ -73,12 +79,12 @@ func (h *hub) setMultihomeBackend(b Adapter) {
 	if h.multihomeEnabled {
 		return //can't have two backends... yet
 	}
-	
+
 	h.multihomeBackend = b
 	h.multihomeEnabled = true
-	
+
 	h.multihomeBackend.Init()
-	
+
 	go h.multihomeBackend.BroadcastFromBackend(h.bbroadcastCh)
 	go h.multihomeBackend.RoomcastFromBackend(h.broomcastCh)
 }
@@ -105,7 +111,13 @@ func (h *hub) listen() {
 		case c := <-h.roomMsgCh:
 			if room, exists := h.rooms[c.RoomName]; exists {
 				for _, s := range room.sockets {
-					s.Emit(c.EventName, c.Data)
+					if len(c.Except) > 0 {
+						if !slices.Contains(c.Except, s.ID()) {
+							s.Emit(c.EventName, c.Data)
+						}
+					} else {
+						s.Emit(c.EventName, c.Data)
+					}
 				}
 			}
 			if h.multihomeEnabled { //the room may exist on the other end
@@ -114,19 +126,37 @@ func (h *hub) listen() {
 		case c := <-h.broomcastCh:
 			if room, exists := h.rooms[c.RoomName]; exists {
 				for _, s := range room.sockets {
-					s.Emit(c.EventName, c.Data)
+					if len(c.Except) > 0 {
+						if !slices.Contains(c.Except, s.ID()) {
+							s.Emit(c.EventName, c.Data)
+						}
+					} else {
+						s.Emit(c.EventName, c.Data)
+					}
 				}
 			}
 		case c := <-h.broadcastCh:
 			for _, s := range h.sockets {
-				s.Emit(c.EventName, c.Data)
+				if len(c.Except) > 0 {
+					if !slices.Contains(c.Except, s.ID()) {
+						s.Emit(c.EventName, c.Data)
+					}
+				} else {
+					s.Emit(c.EventName, c.Data)
+				}
 			}
 			if h.multihomeEnabled {
 				go h.multihomeBackend.BroadcastToBackend(c)
 			}
 		case c := <-h.bbroadcastCh:
 			for _, s := range h.sockets {
-				s.Emit(c.EventName, c.Data)
+				if len(c.Except) > 0 {
+					if !slices.Contains(c.Except, s.ID()) {
+						s.Emit(c.EventName, c.Data)
+					}
+				} else {
+					s.Emit(c.EventName, c.Data)
+				}
 			}
 		case _ = <-h.shutdownCh:
 			var socketList []*Socket
@@ -154,8 +184,8 @@ func newHub() *hub {
 		bbroadcastCh:     make(chan *BroadcastMsg),
 		multihomeEnabled: false,
 	}
-	
+
 	go h.listen()
-	
+
 	return h
 }

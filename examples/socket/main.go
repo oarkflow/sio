@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	
+
 	"github.com/oarkflow/sio"
 	"github.com/oarkflow/sio/chi"
 )
@@ -25,7 +25,7 @@ type message struct {
 }
 
 var (
-	webPort = flag.String("webport", ":8081", "host:port number used for webpage and socket connections")
+	webPort = flag.String("webport", "0.0.0.0:8081", "host:port number used for webpage and socket connections")
 	// redisPort = flag.String("redisport", ":6379", "host:port number used to connect to the redis server")
 	key  = flag.String("key", "", "tls key used for https")
 	cert = flag.String("cert", "", "tls cert used for https")
@@ -36,20 +36,62 @@ var (
 func main() {
 	flag.Parse()
 	srv := chi.NewRouter()
-	s := sio.New()
+	s := sio.New(sio.Config{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+		EnableCompression: true,
+	})
 	var err error
-	
-	s.On("echo", Echo)
-	s.On("echobin", EchoBin)
-	s.On("echojson", EchoJSON)
-	s.On("join", Join)
-	s.On("leave", Leave)
-	s.On("roomcast", Roomcast)
-	s.On("roomcastbin", RoomcastBin)
-	s.On("roomcastjson", RoomcastJSON)
-	s.On("broadcast", Broadcast)
-	s.On("broadcastbin", BroadcastBin)
-	s.On("broadcastjson", BroadcastJSON)
+	s.On("request:login", func(socket *sio.Socket, data []byte) {
+		d := string(data)
+		fmt.Println("Login", d)
+	})
+	s.On("join", func(s *sio.Socket, data []byte) {
+		var room map[string]any
+		err := json.Unmarshal(data, &room)
+		if err == nil {
+			if v, exists := room["room_id"]; exists {
+				s.Join(v.(string))
+				d := string(data)
+				fmt.Println("joining", d)
+				s.ToRoomExcept(v.(string), []string{s.ID()}, "action:peer-room-joined", d)
+				s.Emit("action:room-joined", d)
+			}
+		}
+	})
+	s.On("request:send-message", func(socket *sio.Socket, data []byte) {
+		var room map[string]any
+		err := json.Unmarshal(data, &room)
+		if err == nil {
+			if v, exists := room["room_id"]; exists {
+				s.ToRoomExcept(v.(string), []string{socket.ID()}, "action:message-received", room)
+			}
+		}
+	})
+	s.On("request:typing-start", func(socket *sio.Socket, data []byte) {
+		var room map[string]any
+		err := json.Unmarshal(data, &room)
+		if err == nil {
+			if v, exists := room["room_id"]; exists {
+				s.ToRoomExcept(v.(string), []string{socket.ID()}, "action:peer-typing-start", room)
+			}
+		}
+	})
+	s.On("request:typing-stopped", func(socket *sio.Socket, data []byte) {
+		var room map[string]any
+		err := json.Unmarshal(data, &room)
+		if err == nil {
+			if v, exists := room["room_id"]; exists {
+				s.ToRoomExcept(v.(string), []string{socket.ID()}, "action:peer-typing-stop", room)
+			}
+		}
+	})
+	s.On("leave", func(s *sio.Socket, data []byte) {
+		d := string(data)
+		s.Leave(d)
+		_ = s.Emit("echo", "left room:"+d)
+	})
 	s.OnConnect(func(socket *sio.Socket) error {
 		fmt.Println("Connected", socket.ID())
 		return nil
@@ -63,31 +105,31 @@ func main() {
 		Password: *pass,
 		DB:       *db,
 	}, nil)
-	
+
 	if err != nil {
 		log.Fatal(err)
 	}
-	
+
 	s.SetMultihomeBackend(b)*/
-	
+
 	c := make(chan bool)
 	s.EnableSignalShutdown(c)
-	
+
 	go func() {
 		<-c
 		os.Exit(0)
 	}()
-	
+
 	srv.Handle("/socket", s)
 	srv.Mount("/", http.FileServer(http.Dir("webroot")))
-	
+
 	if *cert == "" || *key == "" {
 		slog.Info(fmt.Sprintf("Listening on http://localhost%s", *webPort))
 		err = http.ListenAndServe(*webPort, srv)
 	} else {
 		err = http.ListenAndServeTLS(*webPort, *cert, *key, srv)
 	}
-	
+
 	if err != nil {
 		slog.Error(err.Error())
 	}
@@ -105,14 +147,22 @@ func EchoJSON(s *sio.Socket, data []byte) {
 	var m message
 	err := json.Unmarshal(data, &m)
 	check(err)
-	
+
 	_ = s.Emit("echojson", m)
 }
 
 func Join(s *sio.Socket, data []byte) {
-	d := string(data)
-	s.Join(d)
-	_ = s.Emit("echo", "joined room:"+d)
+	var room map[string]any
+	err := json.Unmarshal(data, &room)
+	if err == nil {
+		if v, exists := room["room_id"]; exists {
+			s.Join(v.(string))
+			d := string(data)
+			fmt.Println("joining", d)
+			s.ToRoomExcept(v.(string), []string{s.ID()}, "action:peer-room-joined", d)
+			s.Emit("action:room-joined", d)
+		}
+	}
 }
 
 func Leave(s *sio.Socket, data []byte) {
@@ -125,7 +175,7 @@ func Roomcast(s *sio.Socket, data []byte) {
 	var r roomcast
 	err := json.Unmarshal(data, &r)
 	check(err)
-	
+
 	s.ToRoom(r.Room, "roomcast", r.Data)
 }
 
@@ -133,7 +183,7 @@ func RoomcastBin(s *sio.Socket, data []byte) {
 	var r roomcast
 	err := json.Unmarshal(data, &r)
 	check(err)
-	
+
 	s.ToRoom(r.Room, "roomcastbin", []byte(r.Data))
 }
 
@@ -141,7 +191,7 @@ func RoomcastJSON(s *sio.Socket, data []byte) {
 	var r roomcast
 	err := json.Unmarshal(data, &r)
 	check(err)
-	
+
 	s.ToRoom(r.Room, "roomcastjson", r)
 }
 
@@ -157,7 +207,7 @@ func BroadcastJSON(s *sio.Socket, data []byte) {
 	var m message
 	err := json.Unmarshal(data, &m)
 	check(err)
-	
+
 	s.Broadcast("broadcastjson", m)
 }
 

@@ -27,7 +27,7 @@ type Socket struct {
 
 const (
 	idLen int = 24
-	
+
 	typeJSON string = "J"
 	typeBin         = "B"
 	typeStr         = "S"
@@ -82,7 +82,7 @@ func (s *Socket) Request() *http.Request {
 func (s *Socket) GetRooms() []string {
 	s.roomsl.RLock()
 	defer s.roomsl.RUnlock()
-	
+
 	var roomList []string
 	for room := range s.rooms {
 		roomList = append(roomList, room)
@@ -111,12 +111,22 @@ func (s *Socket) Leave(roomName string) {
 
 // ToRoom dispatches an event to all Sockets in the specified room.
 func (s *Socket) ToRoom(roomName, eventName string, data any) {
-	s.serv.hub.toRoom(&RoomMsg{roomName, eventName, data})
+	s.serv.hub.toRoom(&RoomMsg{RoomName: roomName, EventName: eventName, Data: data})
+}
+
+// ToRoomExcept dispatches an event to all Sockets in the specified room.
+func (s *Socket) ToRoomExcept(roomName string, except []string, eventName string, data any) {
+	s.serv.hub.toRoom(&RoomMsg{RoomName: roomName, EventName: eventName, Data: data, Except: except})
 }
 
 // Broadcast dispatches an event to all Sockets on the Server.
 func (s *Socket) Broadcast(eventName string, data any) {
-	s.serv.hub.broadcast(&BroadcastMsg{eventName, data})
+	s.serv.hub.broadcast(&BroadcastMsg{EventName: eventName, Data: data})
+}
+
+// BroadcastExcept dispatches an event to all Sockets on the Server.
+func (s *Socket) BroadcastExcept(eventName string, except []string, data any) {
+	s.serv.hub.broadcast(&BroadcastMsg{EventName: eventName, Data: data, Except: except})
 }
 
 // ToSocket dispatches an event to the specified socket ID.
@@ -140,20 +150,20 @@ func emitData(eventName string, data any) (int, []byte) {
 	buf := bytes.NewBuffer(nil)
 	buf.WriteString(eventName)
 	buf.WriteByte(startOfHeaderByte)
-	
+
 	switch d := data.(type) {
 	case string:
 		buf.WriteString(typeStr)
 		buf.WriteByte(startOfDataByte)
 		buf.WriteString(d)
 		return TextMessage, buf.Bytes()
-	
+
 	case []byte:
 		buf.WriteString(typeBin)
 		buf.WriteByte(startOfDataByte)
 		buf.Write(d)
 		return BinaryMessage, buf.Bytes()
-	
+
 	default:
 		buf.WriteString(typeJSON)
 		buf.WriteByte(startOfDataByte)
@@ -174,34 +184,34 @@ func (s *Socket) Close() error {
 	isAlreadyClosed := s.closed
 	s.closed = true
 	s.l.Unlock()
-	
+
 	if isAlreadyClosed { //can't reclose the socket
 		return nil
 	}
-	
+
 	defer slog.Debug(s.ID(), "disconnected")
-	
+
 	err := s.ws.Close()
 	if err != nil {
 		return err
 	}
-	
+
 	rooms := s.GetRooms()
-	
+
 	for _, room := range rooms {
 		s.Leave(room)
 	}
-	
+
 	s.serv.l.RLock()
 	event := s.serv.onDisconnectFunc
 	s.serv.l.RUnlock()
-	
+
 	if event != nil {
 		if err := event(s); err != nil {
 			return err
 		}
 	}
-	
+
 	s.serv.hub.removeSocket(s)
 	return nil
 }
