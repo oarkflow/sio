@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -46,7 +47,7 @@ func main() {
 	var err error
 	server.On("request:login", func(socket *sio.Socket, data []byte) {
 		d := string(data)
-		fmt.Println("Login", d)
+		log.Println("Login", d)
 	})
 	server.On("join", func(s *sio.Socket, data []byte) {
 		var room map[string]any
@@ -79,6 +80,12 @@ func main() {
 			}
 		}
 	})
+	server.On("request:offer-media", func(socket *sio.Socket, data []byte) {
+		server.BroadcastExcept([]string{socket.ID()}, "action:peer-media-offer", string(data))
+	})
+	server.On("request:accept-media", func(socket *sio.Socket, data []byte) {
+		socket.Emit("action:peer-media-accept", string(data))
+	})
 	server.On("request:send-message", func(socket *sio.Socket, data []byte) {
 		var room map[string]any
 		err := json.Unmarshal(data, &room)
@@ -88,6 +95,7 @@ func main() {
 			}
 		}
 	})
+
 	server.On("request:typing-start", func(socket *sio.Socket, data []byte) {
 		var room map[string]any
 		err := json.Unmarshal(data, &room)
@@ -123,11 +131,11 @@ func main() {
 		_ = s.Emit("echo", "left room:"+d)
 	})
 	server.OnConnect(func(socket *sio.Socket) error {
-		fmt.Println("Connected", socket.ID())
+		log.Println("Connected", socket.ID())
 		return nil
 	})
 	server.OnDisconnect(func(socket *sio.Socket) error {
-		fmt.Println("Disconnected")
+		log.Println("Disconnected")
 		rooms := make(map[string][]map[string]any)
 		GetRooms().Iter(func(roomID string, users *maps.Map[string, map[string]any]) bool {
 			room, _ := rooms[roomID]
@@ -204,7 +212,7 @@ func Join(s *sio.Socket, data []byte) {
 		if v, exists := room["room_id"]; exists {
 			s.Join(v.(string))
 			d := string(data)
-			fmt.Println("joining", d)
+			log.Println("joining", d)
 			s.ToRoomExcept(v.(string), []string{s.ID()}, "action:peer-room-joined", d)
 			s.Emit("action:room-joined", d)
 		}

@@ -223,7 +223,7 @@ func (serv *Server) Broadcast(eventName string, data any) {
 }
 
 // BroadcastExcept dispatches an event to all Sockets on the Server.
-func (serv *Server) BroadcastExcept(eventName string, except []string, data any) {
+func (serv *Server) BroadcastExcept(except []string, eventName string, data any) {
 	serv.hub.broadcast(&BroadcastMsg{EventName: eventName, Except: except, Data: data})
 }
 

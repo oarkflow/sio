@@ -47,13 +47,6 @@
             });
             document.querySelector("form").addEventListener("submit", (ev) => {
                 ev.preventDefault();
-                if (!p.readable) {
-                    p = new SimplePeer({
-                        initiator: location.hash === "#1",
-                        trickle: false,
-                        stream,
-                    });
-                }
                 p.signal(JSON.parse(document.querySelector("#incoming").value));
             });
             p.on("connect", () => {
