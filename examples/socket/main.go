@@ -51,31 +51,48 @@ func main() {
 	})
 	server.On("join", func(s *sio.Socket, data []byte) {
 		var room map[string]any
-		var curRoom *maps.Map[string, map[string]any]
 		err := json.Unmarshal(data, &room)
 		if err == nil {
 			if v, exists := room["room_id"]; exists {
 				roomID := v.(string)
-				if vt, e := GetRoomByID(roomID); e {
-					curRoom = vt
-					curRoom.Put(s.ID(), room)
-				} else {
+				curRoom, exists := GetRoomByID(roomID)
+				if !exists {
 					curRoom = maps.New[string, map[string]any](10000)
-					curRoom.Put(s.ID(), room)
 					AddRoom(roomID, curRoom)
-				}
-				s.Join(roomID)
-				var connections []map[string]any
-				curRoom.Iter(func(key string, val map[string]any) bool {
-					connections = append(connections, val)
-					return true
-				})
-				d := string(data)
-				s.ToRoomExcept(roomID, []string{s.ID()}, "action:peer-joined", d)
-				s.Emit("action:room-joined", d)
-				cons, err := json.Marshal(connections)
-				if err == nil {
-					s.Emit("action:peer-connections", string(cons))
+					curRoom.Put(s.ID(), room)
+					fmt.Println("New", curRoom.Count())
+
+					s.Join(roomID)
+					var connections []map[string]any
+					curRoom.Iter(func(key string, val map[string]any) bool {
+						connections = append(connections, val)
+						return true
+					})
+					d := string(data)
+					s.ToRoomExcept(roomID, []string{s.ID()}, "action:peer-joined", d)
+					s.Emit("action:room-joined", d)
+					cons, err := json.Marshal(connections)
+					if err == nil {
+						s.Emit("action:peer-connections", string(cons))
+					}
+
+				} else {
+					curRoom.Put(s.ID(), room)
+					fmt.Println("Current", curRoom.Count())
+
+					s.Join(roomID)
+					var connections []map[string]any
+					curRoom.Iter(func(key string, val map[string]any) bool {
+						connections = append(connections, val)
+						return true
+					})
+					d := string(data)
+					s.ToRoomExcept(roomID, []string{s.ID()}, "action:peer-joined", d)
+					s.Emit("action:room-joined", d)
+					cons, err := json.Marshal(connections)
+					if err == nil {
+						s.Emit("action:peer-connections", string(cons))
+					}
 				}
 			}
 		}
