@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -38,6 +39,15 @@ func sioEvents(server *sio.Server) {
 		return nil
 	})
 	server.OnDisconnect(func(socket *sio.Socket) error {
+		fmt.Println("Disconnected")
+		for id, con := range server.SocketList() {
+			con.Emit("removePeer", map[string]any{
+				"peer_id": socket.ID(),
+			})
+			socket.Emit("removePeer", map[string]any{
+				"peer_id": id,
+			})
+		}
 		return nil
 	})
 	server.On("join", func(socket *sio.Socket, data []byte) {
@@ -46,7 +56,7 @@ func sioEvents(server *sio.Server) {
 		if err == nil {
 			room := d["channel"].(string)
 			socket.Join(room)
-			for id, con := range server.RoomSocketList(room) {
+			for id, con := range server.SocketList() {
 				con.Emit("addPeer", map[string]any{
 					"peer_id":             socket.ID(),
 					"should_create_offer": false,
@@ -60,7 +70,7 @@ func sioEvents(server *sio.Server) {
 	})
 	server.On("part", func(socket *sio.Socket, data []byte) {
 		room := string(data)
-		for id, con := range server.RoomSocketList(room) {
+		for id, con := range server.SocketList() {
 			con.Emit("removePeer", map[string]any{
 				"peer_id": socket.ID(),
 			})
@@ -76,10 +86,15 @@ func sioEvents(server *sio.Server) {
 		err := json.Unmarshal(data, &config)
 		if err == nil {
 			if iceCandidate, exists := config["ice_candidate"]; exists {
-				server.BroadcastExcept([]string{socket.ID()}, "iceCandidate", map[string]any{
-					"peer_id":       socket.ID(),
-					"ice_candidate": iceCandidate,
-				})
+				peerID := config["peer_id"].(string)
+				for id, con := range server.SocketList() {
+					if peerID == id {
+						con.Emit("iceCandidate", map[string]any{
+							"peer_id":       socket.ID(),
+							"ice_candidate": iceCandidate,
+						})
+					}
+				}
 			}
 		}
 	})
@@ -89,10 +104,15 @@ func sioEvents(server *sio.Server) {
 		err := json.Unmarshal(data, &config)
 		if err == nil {
 			if sessionDescription, exists := config["session_description"]; exists {
-				server.BroadcastExcept([]string{socket.ID()}, "sessionDescription", map[string]any{
-					"peer_id":             socket.ID(),
-					"session_description": sessionDescription,
-				})
+				peerID := config["peer_id"].(string)
+				for id, con := range server.SocketList() {
+					if peerID == id {
+						con.Emit("sessionDescription", map[string]any{
+							"peer_id":             socket.ID(),
+							"session_description": sessionDescription,
+						})
+					}
+				}
 			}
 		}
 	})
