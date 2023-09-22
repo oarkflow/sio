@@ -107,6 +107,17 @@ func (serv *Server) EnableSignalShutdown(complete chan<- bool) {
 	}()
 }
 
+func (serv *Server) RoomSocketList(id string) map[string]*Socket {
+	if room, exists := serv.hub.rooms[id]; exists {
+		return room.sockets
+	}
+	return nil
+}
+
+func (serv *Server) SocketList() map[string]*Socket {
+	return serv.hub.sockets
+}
+
 // Shutdown closes all active sockets and triggers the Shutdown()
 // method on any Adapter that is currently set.
 func (serv *Server) Shutdown() bool {

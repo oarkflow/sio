@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
+    <style>
+        html,
+        body {
+            background-color: #333;
+        }
+
+        video {
+            width: 30rem;
+            aspect-ratio: 16 / 9;
+            border: 1px solid black;
+        }
+        /* CSS para los tags de video */
+
+        video:first-of-type {
+            position: absolute;
+            aspect-ratio: 4 / 3;
+            width: 15rem;
+            right: 10px;
+            bottom: 10px;
+        }
+        /* Estilos CSS para el primer elemento de video (el propio) */
+    </style>
+
+    <script src="js/socket.js"></script>
+</head>
+<body onload="init()"></body>
+
+<script>
+    var SIGNALING_SERVER = (window.location.protocol === 'https:' ? 'wss':'ws')+'://'+window.location.host+'/socket'
+
+    var USE_AUDIO = true
+    var USE_VIDEO = true
+    var DEFAULT_CHANNEL = "canal"
+    var MUTE_AUDIO_BY_DEFAULT = false
+
+    var ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }]
+
+    function join_chat_channel(channel, userdata) {
+        signaling_socket.emit("join", { channel: channel, userdata: userdata })
+    }
+
+    function part_chat_channel(channel) {
+        signaling_socket.emit("part", channel)
+    }
+
+    var signaling_socket = null
+    var local_media_stream = null
+    var peers = {}
+    var peer_media_elements = {}
+
+    function init() {
+        signaling_socket = new window.SS(SIGNALING_SERVER)
+
+        signaling_socket.onConnect(function () {
+            setup_local_media(function () {
+                join_chat_channel(DEFAULT_CHANNEL, { username: "juan perez" })
+            })
+        })
+
+        signaling_socket.onDisconnect(function () {
+            for (peer_id in peer_media_elements) {
+                peer_media_elements[peer_id].remove()
+            }
+            for (peer_id in peers) {
+                peers[peer_id].close()
+            }
+            peers = {}
+            peer_media_elements = {}
+        })
+
+        signaling_socket.on("addPeer", function (config) {
+            var peer_id = config.peer_id
+            if (peer_id in peers) {
+                return
+            }
+
+            var peer_connection = new RTCPeerConnection({ iceServers: ICE_SERVERS }, { optional: [{ DtlsSrtpKeyAgreement: true }] })
+            peers[peer_id] = peer_connection
+
+            peer_connection.onicecandidate = function (event) {
+                if (event.candidate) {
+                    signaling_socket.emit("relayICECandidate", {
+                        peer_id: peer_id,
+                        ice_candidate: {
+                            sdpMLineIndex: event.candidate.sdpMLineIndex,
+                            candidate: event.candidate.candidate
+                        }
+                    })
+                }
+            }
+            let x = 0
+
+            peer_connection.ontrack = function (event) {
+                if (x === 0) x++
+                else return
+                var remote_media = USE_VIDEO ? $("<video>") : $("<audio>")
+                remote_media.attr("autoplay", "autoplay")
+                if (MUTE_AUDIO_BY_DEFAULT) {
+                    remote_media.attr("muted", "true")
+                }
+                remote_media.attr("controls", "")
+                peer_media_elements[peer_id] = remote_media
+                $("body").append(remote_media)
+                attachMediaStream(remote_media[0], event.streams[0])
+            }
+
+            peer_connection.addStream(local_media_stream)
+
+            if (config.should_create_offer) {
+                peer_connection.createOffer(
+                    function (local_description) {
+                        peer_connection.setLocalDescription(
+                            local_description,
+                            function () {
+                                signaling_socket.emit("relaySessionDescription", { peer_id: peer_id, session_description: local_description })
+                            },
+                            function () {
+                                alert("Offer setLocalDescription failed!")
+                            }
+                        )
+                    },
+                    function (error) {
+                    }
+                )
+            }
+        })
+
+        signaling_socket.on("sessionDescription", function (config) {
+            var peer_id = config.peer_id
+            var peer = peers[peer_id]
+            var remote_description = config.session_description
+
+            /* Evento cuando se recibe una descripcion de sesion remota */
+            var desc = new RTCSessionDescription(remote_description)
+            peer.setRemoteDescription(
+                desc,
+                function () {
+                    if (remote_description.type === "offer") {
+                        peer.createAnswer(
+                            function (local_description) {
+                                peer.setLocalDescription(
+                                    local_description,
+                                    function () {
+                                        signaling_socket.emit("relaySessionDescription", { peer_id: peer_id, session_description: local_description })
+                                    },
+                                    function () {
+                                        alert("Answer setLocalDescription failed!")
+                                    }
+                                )
+                            },
+                            function (error) {
+                            }
+                        )
+                    }
+                },
+                function (error) {
+                }
+            )
+        })
+
+        signaling_socket.on("iceCandidate", function (config) {
+            var peer = peers[config.peer_id]
+            var ice_candidate = config.ice_candidate
+            peer.addIceCandidate(new RTCIceCandidate(ice_candidate))
+        })
+
+        signaling_socket.on("removePeer", function (config) {
+            var peer_id = config.peer_id
+
+            if (peer_id in peer_media_elements) {
+                peer_media_elements[peer_id].remove()
+            }
+
+            if (peer_id in peers) {
+                peers[peer_id].close()
+            }
+
+            delete peers[peer_id]
+            delete peer_media_elements[config.peer_id]
+        })
+
+        function setup_local_media(callback, errorback) {
+            if (local_media_stream != null) {
+                if (callback) callback()
+                return
+            }
+
+            navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia
+
+            attachMediaStream = function (element, stream) {
+                element.srcObject = stream
+            }
+
+            navigator.mediaDevices
+                .getUserMedia({ audio: USE_AUDIO, video: USE_VIDEO })
+                .then(function (stream) {
+                    local_media_stream = stream
+                    var local_media = USE_VIDEO ? $("<video>") : $("<audio>")
+
+                    local_media.attr("autoplay", "autoplay")
+                    local_media.attr("muted", "true")
+                    local_media.attr("controls", "")
+                    $("body").append(local_media)
+                    attachMediaStream(local_media[0], stream)
+
+                    if (callback) callback()
+                })
+                .catch(function () {
+                    if (errorback) errorback()
+                })
+        }
+    }
+</script>
+</html>
