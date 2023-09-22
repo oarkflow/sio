@@ -53,6 +53,11 @@ func main() {
 		var room map[string]any
 		err := json.Unmarshal(data, &room)
 		if err == nil {
+			if userID, exists := room["user_id"]; exists {
+				if _, e := s.Get(userID.(string)); !e {
+					s.Set("user_id", userID)
+				}
+			}
 			if v, exists := room["room_id"]; exists {
 				roomID := v.(string)
 				curRoom, exists := GetRoomByID(roomID)
@@ -66,7 +71,7 @@ func main() {
 					var connections []map[string]any
 					curRoom.Iter(func(key string, val map[string]any) bool {
 						connections = append(connections, val)
-						return true
+						return false
 					})
 					d := string(data)
 					s.ToRoomExcept(roomID, []string{s.ID()}, "action:peer-joined", d)
@@ -84,8 +89,9 @@ func main() {
 					var connections []map[string]any
 					curRoom.Iter(func(key string, val map[string]any) bool {
 						connections = append(connections, val)
-						return true
+						return false
 					})
+					fmt.Println("Len", len(connections))
 					d := string(data)
 					s.ToRoomExcept(roomID, []string{s.ID()}, "action:peer-joined", d)
 					s.Emit("action:room-joined", d)
@@ -98,10 +104,40 @@ func main() {
 		}
 	})
 	server.On("request:offer-media", func(socket *sio.Socket, data []byte) {
-		server.BroadcastExcept([]string{socket.ID()}, "action:peer-media-offer", string(data))
+		var offer map[string]any
+		err := json.Unmarshal(data, &offer)
+		if err == nil {
+			AddOffer(socket.ID(), offer)
+		}
+		userID, _ := socket.Get("user_id")
+		offerData := map[string]any{
+			"custom": map[string]any{
+				"user_id":   userID,
+				"socket_id": socket.ID(),
+			},
+			"data": offer,
+		}
+		jsonByte, err := json.Marshal(offerData)
+		if err == nil {
+			server.BroadcastExcept([]string{socket.ID()}, "action:peer-media-offer", string(jsonByte))
+		}
 	})
 	server.On("request:accept-media", func(socket *sio.Socket, data []byte) {
-		socket.Emit("action:peer-media-accept", string(data))
+		var offerAccepted map[string]any
+		err := json.Unmarshal(data, &offerAccepted)
+		if err == nil {
+			if custom, exists := offerAccepted["custom"]; exists {
+				bt, err := json.Marshal(offerAccepted["data"])
+				if err == nil {
+					switch custom := custom.(type) {
+					case map[string]any:
+						socket.ToSocket(custom["socket_id"].(string), "action:peer-media-accept", string(bt))
+					case map[string]string:
+						socket.ToSocket(custom["socket_id"], "action:peer-media-accept", string(bt))
+					}
+				}
+			}
+		}
 	})
 	server.On("request:send-message", func(socket *sio.Socket, data []byte) {
 		var room map[string]any
@@ -138,11 +174,13 @@ func main() {
 			var connections []map[string]any
 			room.Iter(func(key string, val map[string]any) bool {
 				connections = append(connections, val)
-				return true
+				return false
 			})
 			cons, err := json.Marshal(connections)
 			if err == nil {
 				s.ToRoom(d, "action:peer-connections", string(cons))
+			} else {
+				fmt.Println(err)
 			}
 		}
 		_ = s.Emit("echo", "left room:"+d)
@@ -160,6 +198,7 @@ func main() {
 				room = append(room, user)
 				users.Delete(socket.ID())
 			}
+			socket.Leave(roomID)
 			rooms[roomID] = room
 			return true
 		})

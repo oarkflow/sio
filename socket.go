@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+
+	"github.com/oarkflow/sio/internal/maps"
 )
 
 var (
@@ -22,6 +24,7 @@ type Socket struct {
 	serv    *Server
 	roomsl  *sync.RWMutex
 	request *http.Request
+	context *maps.Map[string, any]
 	rooms   map[string]bool
 }
 
@@ -42,6 +45,7 @@ func newSocket(serv *Server, ws *Conn, r *http.Request) *Socket {
 		serv:    serv,
 		roomsl:  &sync.RWMutex{},
 		rooms:   make(map[string]bool),
+		context: maps.New[string, any](100000),
 		request: r,
 	}
 	serv.hub.addSocket(s)
@@ -76,6 +80,21 @@ func (s *Socket) InRoom(roomName string) bool {
 // Request get request
 func (s *Socket) Request() *http.Request {
 	return s.request
+}
+
+// Set get request
+func (s *Socket) Set(key string, val any) {
+	s.context.Put(key, val)
+}
+
+// Get gets value
+func (s *Socket) Get(key string) (any, bool) {
+	return s.context.Get(key)
+}
+
+// Context gets value
+func (s *Socket) Context() *maps.Map[string, any] {
+	return s.context
 }
 
 // GetRooms returns a list of rooms that s is a member of
