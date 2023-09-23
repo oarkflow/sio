@@ -174,7 +174,7 @@ func Handler(options Options) func(next http.Handler) http.Handler {
 // origins with all standard methods with any header and credentials.
 func AllowAll() *Cors {
 	return NewCors(Options{
-		AllowedOrigins: []string{"http://localhost:3000"},
+		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{
 			http.MethodHead,
 			http.MethodGet,

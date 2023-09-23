@@ -9,10 +9,12 @@ import (
 
 	"github.com/oarkflow/sio"
 	"github.com/oarkflow/sio/chi"
+	"github.com/oarkflow/sio/chi/middleware"
 )
 
 func main() {
 	srv := chi.NewRouter()
+	srv.Use(middleware.AllowAll().Handler)
 	server := sio.New(sio.Config{
 		CheckOrigin: func(r *http.Request) bool {
 			return true
@@ -41,10 +43,10 @@ func sioEvents(server *sio.Server) {
 	server.OnDisconnect(func(socket *sio.Socket) error {
 		fmt.Println("Disconnected")
 		for id, con := range server.SocketList() {
-			con.Emit("removePeer", map[string]any{
+			con.Emit("action:peer-remove", map[string]any{
 				"peer_id": socket.ID(),
 			})
-			socket.Emit("removePeer", map[string]any{
+			socket.Emit("action:peer-remove", map[string]any{
 				"peer_id": id,
 			})
 		}
@@ -57,11 +59,11 @@ func sioEvents(server *sio.Server) {
 			room := d["channel"].(string)
 			socket.Join(room)
 			for id, con := range server.SocketList() {
-				con.Emit("addPeer", map[string]any{
+				con.Emit("action:peer-add", map[string]any{
 					"peer_id":             socket.ID(),
 					"should_create_offer": false,
 				})
-				socket.Emit("addPeer", map[string]any{
+				socket.Emit("action:peer-add", map[string]any{
 					"peer_id":             id,
 					"should_create_offer": true,
 				})
@@ -71,17 +73,17 @@ func sioEvents(server *sio.Server) {
 	server.On("part", func(socket *sio.Socket, data []byte) {
 		room := string(data)
 		for id, con := range server.SocketList() {
-			con.Emit("removePeer", map[string]any{
+			con.Emit("action:peer-remove", map[string]any{
 				"peer_id": socket.ID(),
 			})
-			socket.Emit("removePeer", map[string]any{
+			socket.Emit("action:peer-remove", map[string]any{
 				"peer_id": id,
 			})
 		}
 		socket.Leave(room)
 	})
 
-	server.On("relayICECandidate", func(socket *sio.Socket, data []byte) {
+	server.On("request:candidate-peer", func(socket *sio.Socket, data []byte) {
 		var config map[string]any
 		err := json.Unmarshal(data, &config)
 		if err == nil {
@@ -89,7 +91,7 @@ func sioEvents(server *sio.Server) {
 				peerID := config["peer_id"].(string)
 				for id, con := range server.SocketList() {
 					if peerID == id {
-						con.Emit("iceCandidate", map[string]any{
+						con.Emit("action:candidate-peer", map[string]any{
 							"peer_id":       socket.ID(),
 							"ice_candidate": iceCandidate,
 						})
@@ -99,7 +101,7 @@ func sioEvents(server *sio.Server) {
 		}
 	})
 
-	server.On("relaySessionDescription", func(socket *sio.Socket, data []byte) {
+	server.On("request:peer-session", func(socket *sio.Socket, data []byte) {
 		var config map[string]any
 		err := json.Unmarshal(data, &config)
 		if err == nil {
@@ -107,7 +109,7 @@ func sioEvents(server *sio.Server) {
 				peerID := config["peer_id"].(string)
 				for id, con := range server.SocketList() {
 					if peerID == id {
-						con.Emit("sessionDescription", map[string]any{
+						con.Emit("action:peer-session", map[string]any{
 							"peer_id":             socket.ID(),
 							"session_description": sessionDescription,
 						})

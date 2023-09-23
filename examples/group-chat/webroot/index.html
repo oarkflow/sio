@@ -82,7 +82,7 @@
             peer_media_elements = {}
         })
 
-        signaling_socket.on("addPeer", function (config) {
+        signaling_socket.on("action:peer-add", function (config) {
             var peer_id = config.peer_id
             if (peer_id in peers) {
                 return
@@ -93,7 +93,7 @@
 
             peerCon.onicecandidate = function (event) {
                 if (event.candidate) {
-                    signaling_socket.emit("relayICECandidate", {
+                    signaling_socket.emit("request:candidate-peer", {
                         peer_id: peer_id,
                         ice_candidate: {
                             sdpMLineIndex: event.candidate.sdpMLineIndex,
@@ -124,7 +124,7 @@
                 peerCon.createOffer().then((local_description) => {
                     peerCon.setLocalDescription(local_description)
                         .then(() => {
-                            signaling_socket.emit("relaySessionDescription", {
+                            signaling_socket.emit("request:peer-session", {
                                 peer_id: peer_id,
                                 session_description: local_description
                             })
@@ -138,7 +138,7 @@
             }
         })
 
-        signaling_socket.on("sessionDescription", function (config) {
+        signaling_socket.on("action:peer-session", function (config) {
             var peer_id = config.peer_id
             var peer = peers[peer_id]
             var remote_description = config.session_description
@@ -153,7 +153,7 @@
                                 peer.setLocalDescription(
                                     local_description,
                                     function () {
-                                        signaling_socket.emit("relaySessionDescription", {
+                                        signaling_socket.emit("request:peer-session", {
                                             peer_id: peer_id,
                                             session_description: local_description
                                         })
@@ -173,13 +173,13 @@
             )
         })
 
-        signaling_socket.on("iceCandidate", function (config) {
+        signaling_socket.on("action:candidate-peer", function (config) {
             var peer = peers[config.peer_id]
             var ice_candidate = config.ice_candidate
             peer.addIceCandidate(new RTCIceCandidate(ice_candidate))
         })
 
-        signaling_socket.on("removePeer", function (config) {
+        signaling_socket.on("action:peer-remove", function (config) {
             var peer_id = config.peer_id
 
             if (peer_id in peer_media_elements) {
