@@ -49,7 +49,7 @@ func main() {
 		d := string(data)
 		log.Println("Login", d)
 	})
-	server.On("join", func(s *sio.Socket, data []byte) {
+	server.On("request:room-join", func(s *sio.Socket, data []byte) {
 		var room map[string]any
 		err := json.Unmarshal(data, &room)
 		if err == nil {
