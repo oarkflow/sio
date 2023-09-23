@@ -84,6 +84,7 @@
 
         signaling_socket.on("action:peer-add", function (config) {
             var peer_id = config.peer_id
+            var channel = config.channel
             if (peer_id in peers) {
                 return
             }
@@ -95,6 +96,7 @@
                 if (event.candidate) {
                     signaling_socket.emit("request:candidate-peer", {
                         peer_id: peer_id,
+                        channel: channel,
                         ice_candidate: {
                             sdpMLineIndex: event.candidate.sdpMLineIndex,
                             candidate: event.candidate.candidate

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -29,6 +30,7 @@ func main() {
 		<-c
 		os.Exit(0)
 	}()
+	slog.Info("Listening on http://localhost:8085")
 	err := http.ListenAndServe(":8085", srv)
 	if err != nil {
 		log.Fatal(err)
@@ -59,14 +61,16 @@ func sioEvents(server *sio.Server) {
 		if err == nil {
 			room := d["channel"].(string)
 			socket.Join(room)
-			for id, con := range server.SocketList() {
+			for id, con := range server.RoomSocketList(room) {
 				con.Emit("action:peer-add", map[string]any{
 					"peer_id":             socket.ID(),
+					"channel":             room,
 					"should_create_offer": false,
 				})
 				socket.Emit("action:peer-add", map[string]any{
 					"peer_id":             id,
 					"should_create_offer": true,
+					"channel":             room,
 				})
 			}
 		}
@@ -83,7 +87,8 @@ func sioEvents(server *sio.Server) {
 		if err == nil {
 			if iceCandidate, exists := config["ice_candidate"]; exists {
 				peerID := config["peer_id"].(string)
-				for id, con := range server.SocketList() {
+				channel := config["channel"].(string)
+				for id, con := range server.RoomSocketList(channel) {
 					if peerID == id {
 						con.Emit("action:candidate-peer", map[string]any{
 							"peer_id":       socket.ID(),

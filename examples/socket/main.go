@@ -234,7 +234,7 @@ func main() {
 	srv.Mount("/", http.FileServer(http.Dir("webroot")))
 
 	if *cert == "" || *key == "" {
-		slog.Info(fmt.Sprintf("Listening on http://localhost%s", *webPort))
+		slog.Info(fmt.Sprintf("Listening on http://localhost:%s", *webPort))
 		err = http.ListenAndServe(*webPort, srv)
 	} else {
 		err = http.ListenAndServeTLS(*webPort, *cert, *key, srv)
