@@ -128,6 +128,15 @@ func (s *Socket) Leave(roomName string) {
 	delete(s.rooms, roomName)
 }
 
+// LeaveAll removes s from the specified room. If s
+// is not a member of the room, nothing will happen. If the room is
+// empty upon removal of s, the room will be closed
+func (s *Socket) LeaveAll() {
+	for roomName := range s.rooms {
+		s.Leave(roomName)
+	}
+}
+
 // ToRoom dispatches an event to all Sockets in the specified room.
 func (s *Socket) ToRoom(roomName, eventName string, data any) {
 	s.serv.hub.toRoom(&RoomMsg{RoomName: roomName, EventName: eventName, Data: data})
@@ -204,7 +213,7 @@ func (s *Socket) Close() error {
 	s.closed = true
 	s.l.Unlock()
 
-	if isAlreadyClosed { //can't reclose the socket
+	if isAlreadyClosed { // can't reclose the socket
 		return nil
 	}
 

@@ -47,6 +47,7 @@ func sioEvents(server *sio.Server) {
 				"peer_id": id,
 			})
 		}
+		socket.LeaveAll()
 	}
 	server.OnConnect(func(socket *sio.Socket) error {
 		return nil
@@ -59,19 +60,22 @@ func sioEvents(server *sio.Server) {
 		var d map[string]any
 		err := json.Unmarshal(data, &d)
 		if err == nil {
-			room := d["channel"].(string)
+			room := d["room_id"].(string)
 			socket.Join(room)
-			for id, con := range server.RoomSocketList(room) {
-				con.Emit("action:peer-add", map[string]any{
-					"peer_id":             socket.ID(),
-					"channel":             room,
-					"should_create_offer": false,
-				})
-				socket.Emit("action:peer-add", map[string]any{
-					"peer_id":             id,
-					"should_create_offer": true,
-					"channel":             room,
-				})
+			for id, con := range server.SocketList() {
+				if socket.ID() == id {
+					socket.Emit("action:peer-add", map[string]any{
+						"peer_id":             id,
+						"should_create_offer": true,
+						"room_id":             room,
+					})
+				} else {
+					con.Emit("action:peer-add", map[string]any{
+						"peer_id":             socket.ID(),
+						"room_id":             room,
+						"should_create_offer": false,
+					})
+				}
 			}
 		}
 	})
@@ -87,8 +91,7 @@ func sioEvents(server *sio.Server) {
 		if err == nil {
 			if iceCandidate, exists := config["ice_candidate"]; exists {
 				peerID := config["peer_id"].(string)
-				channel := config["channel"].(string)
-				for id, con := range server.RoomSocketList(channel) {
+				for id, con := range server.SocketList() {
 					if peerID == id {
 						con.Emit("action:candidate-peer", map[string]any{
 							"peer_id":       socket.ID(),
