@@ -13,6 +13,7 @@
             aspect-ratio: 16 / 9;
             border: 1px solid black;
         }
+
         /* CSS para los tags de video */
 
         video:first-of-type {
@@ -22,7 +23,6 @@
             right: 10px;
             bottom: 10px;
         }
-        /* Estilos CSS para el primer elemento de video (el propio) */
     </style>
 
     <script src="js/socket.js"></script>
@@ -30,7 +30,7 @@
 <body onload="init()"></body>
 
 <script>
-    var SIGNALING_SERVER = (window.location.protocol === 'https:' ? 'wss':'ws')+'://'+window.location.host+'/socket'
+    var SIGNALING_SERVER = (window.location.protocol === 'https:' ? 'wss' : 'ws') + '://' + window.location.host + '/socket'
 
     var USE_AUDIO = true
     var USE_VIDEO = true
@@ -38,15 +38,15 @@
     var MUTE_AUDIO_BY_DEFAULT = false
 
     var ICE_SERVERS = [
-        { urls: "stun:stun.l.google.com:19302" },
-        {urls:'stun:stun1.l.google.com:19302'},
-        {urls:'stun:stun2.l.google.com:19302'},
-        {urls:'stun:stun3.l.google.com:19302'},
-        {urls:'stun:stun4.l.google.com:19302'},
+        {urls: "stun:stun.l.google.com:19302"},
+        {urls: 'stun:stun1.l.google.com:19302'},
+        {urls: 'stun:stun2.l.google.com:19302'},
+        {urls: 'stun:stun3.l.google.com:19302'},
+        {urls: 'stun:stun4.l.google.com:19302'},
     ]
 
     function join_chat_channel(channel, userdata) {
-        signaling_socket.emit("join", { channel: channel, userdata: userdata })
+        signaling_socket.emit("join", {channel: channel, userdata: userdata})
     }
 
     function part_chat_channel(channel) {
@@ -58,12 +58,16 @@
     var peers = {}
     var peer_media_elements = {}
 
+    var attachMediaStream = function (element, stream) {
+        element.srcObject = stream
+    }
+
     function init() {
         signaling_socket = new window.SS(SIGNALING_SERVER)
 
         signaling_socket.onConnect(function () {
             setup_local_media(function () {
-                join_chat_channel(DEFAULT_CHANNEL, { username: "juan perez" })
+                join_chat_channel(DEFAULT_CHANNEL, {username: "juan perez"})
             })
         })
 
@@ -84,10 +88,10 @@
                 return
             }
 
-            var peer_connection = new RTCPeerConnection({ iceServers: ICE_SERVERS }, { optional: [{ DtlsSrtpKeyAgreement: true }] })
-            peers[peer_id] = peer_connection
+            var peerCon = new RTCPeerConnection({iceServers: ICE_SERVERS}, {optional: [{DtlsSrtpKeyAgreement: true}]})
+            peers[peer_id] = peerCon
 
-            peer_connection.onicecandidate = function (event) {
+            peerCon.onicecandidate = function (event) {
                 if (event.candidate) {
                     signaling_socket.emit("relayICECandidate", {
                         peer_id: peer_id,
@@ -100,7 +104,7 @@
             }
             let x = 0
 
-            peer_connection.ontrack = function (event) {
+            peerCon.ontrack = function (event) {
                 if (x === 0) x++
                 else return
                 var remote_media = USE_VIDEO ? $("<video>") : $("<audio>")
@@ -114,24 +118,23 @@
                 attachMediaStream(remote_media[0], event.streams[0])
             }
 
-            peer_connection.addStream(local_media_stream)
+            peerCon.addStream(local_media_stream)
 
             if (config.should_create_offer) {
-                peer_connection.createOffer(
-                    function (local_description) {
-                        peer_connection.setLocalDescription(
-                            local_description,
-                            function () {
-                                signaling_socket.emit("relaySessionDescription", { peer_id: peer_id, session_description: local_description })
-                            },
-                            function () {
-                                alert("Offer setLocalDescription failed!")
-                            }
-                        )
-                    },
-                    function (error) {
-                    }
-                )
+                peerCon.createOffer().then((local_description) => {
+                    peerCon.setLocalDescription(local_description)
+                        .then(() => {
+                            signaling_socket.emit("relaySessionDescription", {
+                                peer_id: peer_id,
+                                session_description: local_description
+                            })
+                        })
+                        .catch((err) => {
+                            console.error("Offer setLocalDescription failed!", err)
+                        })
+                }).catch((err) => {
+                    console.error("Offer creation failed!", err)
+                })
             }
         })
 
@@ -140,7 +143,6 @@
             var peer = peers[peer_id]
             var remote_description = config.session_description
 
-            /* Evento cuando se recibe una descripcion de sesion remota */
             var desc = new RTCSessionDescription(remote_description)
             peer.setRemoteDescription(
                 desc,
@@ -151,7 +153,10 @@
                                 peer.setLocalDescription(
                                     local_description,
                                     function () {
-                                        signaling_socket.emit("relaySessionDescription", { peer_id: peer_id, session_description: local_description })
+                                        signaling_socket.emit("relaySessionDescription", {
+                                            peer_id: peer_id,
+                                            session_description: local_description
+                                        })
                                     },
                                     function () {
                                         alert("Answer setLocalDescription failed!")
@@ -197,12 +202,12 @@
 
             navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia
 
-            attachMediaStream = function (element, stream) {
-                element.srcObject = stream
-            }
-
             navigator.mediaDevices
-                .getUserMedia({ audio: USE_AUDIO, video: USE_VIDEO })
+                .getUserMedia({
+                    audio: {
+                        noiseSuppression: true,
+                        echoCancellation: true,
+                    }, video: USE_VIDEO})
                 .then(function (stream) {
                     local_media_stream = stream
                     var local_media = USE_VIDEO ? $("<video>") : $("<audio>")
