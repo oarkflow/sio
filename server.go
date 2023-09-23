@@ -89,6 +89,15 @@ func New(cfg ...Config) *Server {
 	return s
 }
 
+func (serv *Server) ShutdownWithSignal() {
+	c := make(chan bool)
+	serv.EnableSignalShutdown(c)
+	go func() {
+		<-c
+		os.Exit(0)
+	}()
+}
+
 // EnableSignalShutdown listens for linux syscalls SIGHUP, SIGINT, SIGTERM, SIGQUIT, SIGKILL and
 // calls the Server.Shutdown() to perform a clean shutdown. true will be passed into complete
 // after the Shutdown proccess is finished

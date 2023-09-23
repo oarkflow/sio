@@ -46,11 +46,11 @@
     ]
 
     function join_chat_channel(channel, userdata) {
-        signaling_socket.emit("join", {channel: channel, userdata: userdata})
+        signaling_socket.emit("request:room-join", {channel: channel, userdata: userdata})
     }
 
     function part_chat_channel(channel) {
-        signaling_socket.emit("part", channel)
+        signaling_socket.emit("request:room-leave", channel)
     }
 
     var signaling_socket = null

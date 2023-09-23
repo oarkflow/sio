@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -37,11 +36,7 @@ func main() {
 }
 
 func sioEvents(server *sio.Server) {
-	server.OnConnect(func(socket *sio.Socket) error {
-		return nil
-	})
-	server.OnDisconnect(func(socket *sio.Socket) error {
-		fmt.Println("Disconnected")
+	peerRemove := func(socket *sio.Socket) {
 		for id, con := range server.SocketList() {
 			con.Emit("action:peer-remove", map[string]any{
 				"peer_id": socket.ID(),
@@ -50,9 +45,15 @@ func sioEvents(server *sio.Server) {
 				"peer_id": id,
 			})
 		}
+	}
+	server.OnConnect(func(socket *sio.Socket) error {
 		return nil
 	})
-	server.On("join", func(socket *sio.Socket, data []byte) {
+	server.OnDisconnect(func(socket *sio.Socket) error {
+		peerRemove(socket)
+		return nil
+	})
+	server.On("request:room-join", func(socket *sio.Socket, data []byte) {
 		var d map[string]any
 		err := json.Unmarshal(data, &d)
 		if err == nil {
@@ -70,16 +71,9 @@ func sioEvents(server *sio.Server) {
 			}
 		}
 	})
-	server.On("part", func(socket *sio.Socket, data []byte) {
+	server.On("request:room-leave", func(socket *sio.Socket, data []byte) {
+		peerRemove(socket)
 		room := string(data)
-		for id, con := range server.SocketList() {
-			con.Emit("action:peer-remove", map[string]any{
-				"peer_id": socket.ID(),
-			})
-			socket.Emit("action:peer-remove", map[string]any{
-				"peer_id": id,
-			})
-		}
 		socket.Leave(room)
 	})
 
