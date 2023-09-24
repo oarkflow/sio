@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
+    <style>
+        html,
+        body {
+            background-color: #333;
+        }
+
+        video {
+            width: 30rem;
+            aspect-ratio: 16 / 9;
+            border: 1px solid black;
+        }
+        /* CSS para los tags de video */
+
+        video:first-of-type {
+            position: absolute;
+            aspect-ratio: 4 / 3;
+            width: 15rem;
+            right: 10px;
+            bottom: 10px;
+        }
+        /* Estilos CSS para el primer elemento de video (el propio) */
+    </style>
+
+    <script src="https://cdn.socket.io/socket.io-1.4.5.js"></script>
+</head>
+<body onload="init()"></body>
+
+<script>
+    // Generar URL donde se va a establecer el servidor de señalizacion
+    // Este se encarga de establecer y coordinar la conexion entre peers
+    var SIGNALING_SERVER = window.location.protocol + "://" + window.location.hostname + (window.location.port ? ":" + window.location.port : "")
+
+    // Config default para unirse a conferencia
+    var USE_AUDIO = true
+    var USE_VIDEO = true
+    var DEFAULT_CHANNEL = "canal"
+    var MUTE_AUDIO_BY_DEFAULT = false
+
+    // Servidor ICE de google para facilitar conexiones P2P y evadir restricciones NAT
+    var ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }]
+
+    // Función para unirse a un canal de chat, emite el evento "join" sobre el server de señalizacion
+    // y le pasa el canal ("canal" por default) y la data del usuario
+    function join_chat_channel(channel, userdata) {
+        signaling_socket.emit("join", { channel: channel, userdata: userdata })
+    }
+
+    /* Funcion para salir de un canal de chat */
+    function part_chat_channel(channel) {
+        signaling_socket.emit("part", channel)
+    }
+
+    /* Variables para la señalizacion de la conexion*/
+    var signaling_socket = null
+    var local_media_stream = null
+    var peers = {}
+    var peer_media_elements = {}
+
+    // Función que se activa al establecer la conexión con el usuario que hace la request
+    function init() {
+        console.log("Connecting to signaling server")
+        // Establecer conexion de socket con la instancia del cliente y el signaling server
+        signaling_socket = io(SIGNALING_SERVER)
+        signaling_socket = io()
+
+        /* Conexión al servidor de señalizacion */
+        // Al conectarse al server de señalizacion, se triggerea el evento join y el usuario se une al canal especificado con su respectiva info (hardcodeada en este caso)
+        signaling_socket.on("connect", function () {
+            console.log("Connected to signaling server")
+            setup_local_media(function () {
+                join_chat_channel(DEFAULT_CHANNEL, { username: "juan perez" })
+            })
+        })
+
+        /* Evento cuando se desconecta al servidor de señalizacion */
+        // Al desconectar el socket, se remueven una por una las conexiones socket con cada peer
+        signaling_socket.on("disconnect", function () {
+            console.log("Disconnected from signaling server")
+
+            for (peer_id in peer_media_elements) {
+                peer_media_elements[peer_id].remove()
+            }
+            for (peer_id in peers) {
+                peers[peer_id].close()
+            }
+
+            peers = {}
+            peer_media_elements = {}
+        })
+
+        // Funcion que se activa cuando se establece una nueva conexion con otro peer
+        // Puede ser cuando el propio usuario se une a una conferencia ya iniciada previamente, y conecta con todos los peers que ya estaban ahi; o cuando otro usuario se une a la conferencia
+        signaling_socket.on("addPeer", function (config) {
+            console.log("Signaling server said to add peer:", config)
+            var peer_id = config.peer_id
+            if (peer_id in peers) {
+                console.log("Already connected to peer ", peer_id)
+                return
+            }
+
+            // Esta instancia representa una on que incluye informacion sobre ambos usuarios y el tipo de informacion de la misma
+            var peer_connection = new RTCPeerConnection({ iceServers: ICE_SERVERS }, { optional: [{ DtlsSrtpKeyAgreement: true }] })
+            peers[peer_id] = peer_connection
+
+            // Esta funcion envia los candidatos ICE que contiene el objeto peer_connection, al servidor de señalizacion
+            peer_connection.onicecandidate = function (event) {
+                if (event.candidate) {
+                    signaling_socket.emit("relayICECandidate", {
+                        peer_id: peer_id,
+                        ice_candidate: {
+                            sdpMLineIndex: event.candidate.sdpMLineIndex,
+                            candidate: event.candidate.candidate
+                        }
+                    })
+                }
+            }
+            let x = 0
+
+            /* Evento cuando se agrega un peer en la conexion */
+            peer_connection.ontrack = function (event) {
+                if (x === 0) x++
+                else return
+                console.log("ontrack", event)
+                // Agregar tag HTML con el video y el audio por cada peer
+                var remote_media = USE_VIDEO ? $("<video>") : $("<audio>")
+                remote_media.attr("autoplay", "autoplay")
+                if (MUTE_AUDIO_BY_DEFAULT) {
+                    remote_media.attr("muted", "true")
+                }
+                remote_media.attr("controls", "")
+                peer_media_elements[peer_id] = remote_media
+                $("body").append(remote_media)
+                attachMediaStream(remote_media[0], event.streams[0])
+            }
+
+            peer_connection.addStream(local_media_stream)
+
+            // Emitir oferta a traves de signaling socket con la informacion del peer y compartirla con el otro peer remoto
+            if (config.should_create_offer) {
+                console.log("Creating RTC offer to ", peer_id)
+                peer_connection.createOffer(
+                    function (local_description) {
+                        console.log("Local offer description is: ", local_description)
+                        peer_connection.setLocalDescription(
+                            local_description,
+                            function () {
+                                signaling_socket.emit("relaySessionDescription", { peer_id: peer_id, session_description: local_description })
+                                console.log("Offer setLocalDescription succeeded")
+                            },
+                            function () {
+                                Alert("Offer setLocalDescription failed!")
+                            }
+                        )
+                    },
+                    function (error) {
+                        console.log("Error sending offer: ", error)
+                    }
+                )
+            }
+        })
+
+        signaling_socket.on("sessionDescription", function (config) {
+            console.log("Remote description received: ", config)
+            var peer_id = config.peer_id
+            var peer = peers[peer_id]
+            var remote_description = config.session_description
+            console.log(config.session_description)
+
+            var desc = new RTCSessionDescription(remote_description)
+            var stuff = peer.setRemoteDescription(
+                desc,
+                function () {
+                    console.log("setRemoteDescription succeeded")
+                    if (remote_description.type === "offer") {
+                        console.log("Creating answer")
+                        peer.createAnswer(
+                            function (local_description) {
+                                console.log("Answer description is: ", local_description)
+                                peer.setLocalDescription(
+                                    local_description,
+                                    function () {
+                                        signaling_socket.emit("relaySessionDescription", { peer_id: peer_id, session_description: local_description })
+                                        console.log("Answer setLocalDescription succeeded")
+                                    },
+                                    function () {
+                                        Alert("Answer setLocalDescription failed!")
+                                    }
+                                )
+                            },
+                            function (error) {
+                                console.log("Error creating answer: ", error)
+                                console.log(peer)
+                            }
+                        )
+                    }
+                },
+                function (error) {
+                    console.log("setRemoteDescription error: ", error)
+                }
+            )
+            console.log("Description Object: ", desc)
+        })
+
+        /* Evento cuando se recibe un IceCandidate */
+        signaling_socket.on("iceCandidate", function (config) {
+            var peer = peers[config.peer_id]
+            var ice_candidate = config.ice_candidate
+            peer.addIceCandidate(new RTCIceCandidate(ice_candidate))
+        })
+
+        // Eliminar peer y sus medios de stream
+        signaling_socket.on("removePeer", function (config) {
+            console.log("El servidor de señalización ha indicado eliminar al par:", config)
+            var peer_id = config.peer_id
+
+            // Eliminar los elementos del peer si existe
+            if (peer_id in peer_media_elements) {
+                peer_media_elements[peer_id].remove()
+            }
+
+            // Cerrar la conexión del peer si existe
+            if (peer_id in peers) {
+                peers[peer_id].close()
+            }
+
+            // Eliminar la referencia al peer
+            delete peers[peer_id]
+            delete peer_media_elements[config.peer_id]
+        })
+
+        // Obtener media del propio usuario
+        function setup_local_media(callback, errorback) {
+            if (local_media_stream != null) {
+                if (callback) callback()
+                return
+            }
+
+            // Obtener el metodo adecuado para obtener acceso a los dispositivos de audio/video
+            navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia
+
+            // Funcion para adjuntar el los elementos al HTML
+            attachMediaStream = function (element, stream) {
+                console.log("DEPRECIADO, attachMediaStream será eliminado pronto.")
+                element.srcObject = stream
+            }
+
+            // Obtener acceso a los dispositivos de audio/video
+            navigator.mediaDevices
+                .getUserMedia({ audio: USE_AUDIO, video: USE_VIDEO })
+                .then(function (stream) {
+                    console.log("Acceso concedido al audio/video")
+                    local_media_stream = stream
+                    var local_media = USE_VIDEO ? $("<video>") : $("<audio>")
+
+                    // Configurar atributos para el elemento de medios local
+                    local_media.attr("autoplay", "autoplay")
+                    local_media.attr("muted", "true")
+                    local_media.attr("controls", "")
+                    $("body").append(local_media)
+                    attachMediaStream(local_media[0], stream)
+
+                    if (callback) callback()
+                })
+                .catch(function () {
+                    console.log("Acceso denegado al audio/video")
+                    if (errorback) errorback()
+                })
+        }
+    }
+</script>
+</html>

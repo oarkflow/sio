@@ -116,6 +116,14 @@ func (serv *Server) EnableSignalShutdown(complete chan<- bool) {
 	}()
 }
 
+func (serv *Server) Lock() {
+	serv.l.Lock()
+}
+
+func (serv *Server) Unlock() {
+	serv.l.Unlock()
+}
+
 func (serv *Server) RoomSocketList(id string) map[string]*Socket {
 	if room, exists := serv.hub.rooms[id]; exists {
 		return room.sockets

@@ -62,21 +62,22 @@ func sioEvents(server *sio.Server) {
 		if err == nil {
 			room := d["room_id"].(string)
 			socket.Join(room)
-			for id, con := range server.SocketList() {
-				if socket.ID() == id {
+			server.Lock()
+			defer server.Unlock()
+			for id, _ := range server.RoomSocketList(room) {
+				if socket.ID() != id {
 					socket.Emit("action:peer-add", map[string]any{
 						"peer_id":             id,
-						"should_create_offer": true,
-						"room_id":             room,
-					})
-				} else {
-					con.Emit("action:peer-add", map[string]any{
-						"peer_id":             socket.ID(),
-						"room_id":             room,
 						"should_create_offer": false,
+						"channel":             room,
 					})
 				}
 			}
+			socket.BroadcastExcept([]string{socket.ID()}, "action:peer-add", map[string]any{
+				"peer_id":             socket.ID(),
+				"should_create_offer": false,
+				"channel":             room,
+			})
 		}
 	})
 	server.On("request:room-leave", func(socket *sio.Socket, data []byte) {
@@ -117,6 +118,35 @@ func sioEvents(server *sio.Server) {
 						})
 					}
 				}
+			}
+		}
+	})
+
+	server.On("request:send-message", func(socket *sio.Socket, data []byte) {
+		var room map[string]any
+		err := json.Unmarshal(data, &room)
+		if err == nil {
+			if v, exists := room["room_id"]; exists {
+				server.ToRoomExcept(v.(string), []string{socket.ID()}, "action:message-received", room)
+			}
+		}
+	})
+
+	server.On("request:typing-start", func(socket *sio.Socket, data []byte) {
+		var room map[string]any
+		err := json.Unmarshal(data, &room)
+		if err == nil {
+			if v, exists := room["room_id"]; exists {
+				server.ToRoomExcept(v.(string), []string{socket.ID()}, "action:peer-typing-start", room)
+			}
+		}
+	})
+	server.On("request:typing-stopped", func(socket *sio.Socket, data []byte) {
+		var room map[string]any
+		err := json.Unmarshal(data, &room)
+		if err == nil {
+			if v, exists := room["room_id"]; exists {
+				server.ToRoomExcept(v.(string), []string{socket.ID()}, "action:peer-typing-stop", room)
 			}
 		}
 	})
