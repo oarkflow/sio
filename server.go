@@ -125,16 +125,25 @@ func (serv *Server) Unlock() {
 }
 
 func (serv *Server) RoomSocketList(id string) map[string]*Socket {
+	sockets := make(map[string]*Socket)
 	serv.l.Lock()
 	if room, exists := serv.hub.rooms[id]; exists {
-		return room.sockets
+		for id, socket := range room.sockets {
+			sockets[id] = socket
+		}
 	}
 	serv.l.Unlock()
-	return nil
+	return sockets
 }
 
 func (serv *Server) SocketList() map[string]*Socket {
-	return serv.hub.sockets
+	sockets := make(map[string]*Socket)
+	serv.l.Lock()
+	for id, socket := range serv.hub.sockets {
+		sockets[id] = socket
+	}
+	serv.l.Unlock()
+	return sockets
 }
 
 // Shutdown closes all active sockets and triggers the Shutdown()
