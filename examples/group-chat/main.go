@@ -62,8 +62,6 @@ func sioEvents(server *sio.Server) {
 		if err == nil {
 			room := d["room_id"].(string)
 			socket.Join(room)
-			server.Lock()
-			defer server.Unlock()
 			for id, _ := range server.RoomSocketList(room) {
 				if socket.ID() != id {
 					socket.Emit("action:peer-add", map[string]any{

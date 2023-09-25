@@ -14,7 +14,7 @@ type hub struct {
 	joinRoomCh       chan *joinRequest
 	leaveRoomCh      chan *leaveRequest
 	roomMsgCh        chan *RoomMsg
-	broomcastCh      chan *RoomMsg //for passing data from the backend
+	broomcastCh      chan *RoomMsg // for passing data from the backend
 	broadcastCh      chan *BroadcastMsg
 	bbroadcastCh     chan *BroadcastMsg
 	multihomeEnabled bool
@@ -77,7 +77,7 @@ func (h *hub) broadcast(b *BroadcastMsg) {
 
 func (h *hub) setMultihomeBackend(b Adapter) {
 	if h.multihomeEnabled {
-		return //can't have two backends... yet
+		return // can't have two backends... yet
 	}
 
 	h.multihomeBackend = b
@@ -97,14 +97,14 @@ func (h *hub) listen() {
 		case c := <-h.delCh:
 			delete(h.sockets, c.ID())
 		case c := <-h.joinRoomCh:
-			if _, exists := h.rooms[c.roomName]; !exists { //make the room if it doesn't exist
+			if _, exists := h.rooms[c.roomName]; !exists { // make the room if it doesn't exist
 				h.rooms[c.roomName] = &room{c.roomName, make(map[string]*Socket)}
 			}
 			h.rooms[c.roomName].sockets[c.socket.ID()] = c.socket
 		case c := <-h.leaveRoomCh:
 			if room, exists := h.rooms[c.roomName]; exists {
 				delete(room.sockets, c.socket.ID())
-				if len(room.sockets) == 0 { //room is empty, delete it
+				if len(room.sockets) == 0 { // room is empty, delete it
 					delete(h.rooms, c.roomName)
 				}
 			}
@@ -120,7 +120,7 @@ func (h *hub) listen() {
 					}
 				}
 			}
-			if h.multihomeEnabled { //the room may exist on the other end
+			if h.multihomeEnabled { // the room may exist on the other end
 				go h.multihomeBackend.RoomcastToBackend(c)
 			}
 		case c := <-h.broomcastCh:
