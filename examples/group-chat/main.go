@@ -104,6 +104,12 @@ func sioEvents(server *sio.Server) {
 		}
 	})
 
+	server.On("request:media-stopped", func(socket *sio.Socket, data []byte) {
+		socket.BroadcastExcept([]string{socket.ID()}, "action:media-stopped", map[string]any{
+			"peer_id": socket.ID(),
+		})
+	})
+
 	server.On("request:peer-session", func(socket *sio.Socket, data []byte) {
 		var config map[string]any
 		err := json.Unmarshal(data, &config)
