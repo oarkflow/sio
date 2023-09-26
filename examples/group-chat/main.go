@@ -65,16 +65,14 @@ func sioEvents(server *sio.Server) {
 			for id, _ := range server.RoomSocketList(room) {
 				if socket.ID() != id {
 					socket.Emit("action:peer-add", map[string]any{
-						"peer_id":             id,
-						"should_create_offer": false,
-						"channel":             room,
+						"peer_id": id,
+						"room_id": room,
 					})
 				}
 			}
 			socket.BroadcastExcept([]string{socket.ID()}, "action:peer-add", map[string]any{
-				"peer_id":             socket.ID(),
-				"should_create_offer": false,
-				"channel":             room,
+				"peer_id": socket.ID(),
+				"room_id": room,
 			})
 		}
 	})
