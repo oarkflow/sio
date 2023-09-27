@@ -5,7 +5,6 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
-	"os"
 
 	"github.com/oarkflow/sio"
 	"github.com/oarkflow/sio/chi"
@@ -24,12 +23,7 @@ func main() {
 	sioEvents(server)
 	srv.Handle("/socket", server)
 	srv.Mount("/", http.FileServer(http.Dir("webroot")))
-	c := make(chan bool)
-	server.EnableSignalShutdown(c)
-	go func() {
-		<-c
-		os.Exit(0)
-	}()
+	server.ShutdownWithSignal()
 	slog.Info("Listening on http://localhost:8085")
 	err := http.ListenAndServe(":8085", srv)
 	if err != nil {

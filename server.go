@@ -126,13 +126,13 @@ func (serv *Server) Unlock() {
 
 func (serv *Server) RoomSocketList(id string) map[string]*Socket {
 	sockets := make(map[string]*Socket)
-	serv.l.Lock()
 	if room, exists := serv.hub.rooms[id]; exists {
+		room.l.Lock()
 		for id, socket := range room.sockets {
 			sockets[id] = socket
 		}
+		room.l.Unlock()
 	}
-	serv.l.Unlock()
 	return sockets
 }
 
