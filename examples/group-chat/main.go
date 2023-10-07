@@ -6,9 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/oarkflow/chi"
+	"github.com/oarkflow/chi/middleware"
+
 	"github.com/oarkflow/sio"
-	"github.com/oarkflow/sio/chi"
-	"github.com/oarkflow/sio/chi/middleware"
 )
 
 func main() {

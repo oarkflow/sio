@@ -12,8 +12,9 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/oarkflow/chi"
+
 	"github.com/oarkflow/sio"
-	"github.com/oarkflow/sio/chi"
 	"github.com/oarkflow/sio/internal/maps"
 )
 

@@ -2,8 +2,8 @@ package main
 
 import (
 	"net/http"
-	
-	"github.com/oarkflow/sio/chi"
+
+	"github.com/oarkflow/chi"
 )
 
 func main() {

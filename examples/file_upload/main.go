@@ -7,9 +7,10 @@ import (
 	"net/http"
 	"os"
 	"time"
-	
+
+	"github.com/oarkflow/chi"
+
 	"github.com/oarkflow/sio"
-	"github.com/oarkflow/sio/chi"
 )
 
 const HandshakeTimeoutSecs = 10
@@ -33,7 +34,7 @@ type wsConn struct {
 func upload(w http.ResponseWriter, r *http.Request) {
 	wsc := wsConn{}
 	var err error
-	
+
 	// Open websocket connection.
 	upgrader := sio.Upgrader{HandshakeTimeout: time.Second * HandshakeTimeoutSecs}
 	wsc.conn, err = upgrader.Upgrade(w, r, nil)
@@ -42,7 +43,7 @@ func upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer wsc.conn.Close()
-	
+
 	// Get upload file name and length.
 	header := new(UploadHeader)
 	mt, message, err := wsc.conn.ReadMessage()
@@ -66,7 +67,7 @@ func upload(w http.ResponseWriter, r *http.Request) {
 		wsc.sendStatus(400, "Upload file is empty")
 		return
 	}
-	
+
 	// Create temp file to save file.
 	var tempFile *os.File
 	if tempFile, err = os.CreateTemp("", "websocket_upload_"); err != nil {
@@ -78,7 +79,7 @@ func upload(w http.ResponseWriter, r *http.Request) {
 		// *** IN PRODUCTION FILE SHOULD BE REMOVED AFTER PROCESSING ***
 		// _ = os.Remove(tempFile.Name())
 	}()
-	
+
 	// Read file blocks until all bytes are received.
 	bytesRead := 0
 	for {
@@ -97,18 +98,18 @@ func upload(w http.ResponseWriter, r *http.Request) {
 			wsc.sendStatus(400, "Invalid file block received")
 			return
 		}
-		
+
 		tempFile.Write(message)
-		
+
 		bytesRead += len(message)
 		if bytesRead == header.Size {
 			tempFile.Close()
 			break
 		}
-		
+
 		wsc.requestNextBlock()
 	}
-	
+
 	// *****************************
 	// *** Process uploaded file ***
 	// *****************************
