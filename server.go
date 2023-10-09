@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 )
 
 const ( //                        ASCII chars
@@ -26,20 +25,6 @@ type event struct {
 	eventHandler func(*Socket, []byte)
 }
 
-// Config specifies parameters for upgrading an HTTP connection to a
-// WebSocket connection.
-//
-// It is safe to call Config's methods concurrently.
-type Config struct {
-	HandshakeTimeout                time.Duration
-	ReadBufferSize, WriteBufferSize int
-	WriteBufferPool                 BufferPool
-	Subprotocols                    []string
-	Error                           func(w http.ResponseWriter, r *http.Request, status int, reason error)
-	CheckOrigin                     func(r *http.Request) bool
-	EnableCompression               bool
-}
-
 // Server manages the coordination between
 // sockets, rooms, events and the socket hub
 // add my own custom field
@@ -50,40 +35,24 @@ type Server struct {
 	onDisconnectFunc func(*Socket) error
 	onError          func(*Socket, error)
 	l                *sync.RWMutex
-	upgrader         *Upgrader
+	opts             *AcceptOptions
+	UserID           string
 }
 
 // New creates a new instance of Server
-func New(cfg ...Config) *Server {
-	var config Config
-	upgrader := DefaultUpgrader()
-	if len(cfg) > 0 {
-		config = cfg[0]
+func New(opts ...*AcceptOptions) *Server {
+	var opt *AcceptOptions
+	if len(opts) > 0 {
+		opt = opts[0]
 	}
-	if config.CheckOrigin != nil {
-		upgrader.CheckOrigin = config.CheckOrigin
+	if len(opt.Subprotocols) == 0 {
+		opt.Subprotocols = []string{SubProtocol}
 	}
-	if config.HandshakeTimeout != 0 {
-		upgrader.HandshakeTimeout = config.HandshakeTimeout
-	}
-	if config.ReadBufferSize != 0 {
-		upgrader.ReadBufferSize = config.ReadBufferSize
-	}
-	if config.WriteBufferSize != 0 {
-		upgrader.WriteBufferSize = config.WriteBufferSize
-	}
-	if len(config.Subprotocols) > 0 {
-		upgrader.Subprotocols = config.Subprotocols
-	}
-	if config.Error != nil {
-		upgrader.Error = config.Error
-	}
-	upgrader.EnableCompression = config.EnableCompression
 	s := &Server{
-		hub:      newHub(),
-		events:   make(map[string]*event),
-		l:        &sync.RWMutex{},
-		upgrader: upgrader,
+		hub:    newHub(),
+		events: make(map[string]*event),
+		l:      &sync.RWMutex{},
+		opts:   opt,
 	}
 
 	return s
@@ -149,7 +118,6 @@ func (serv *Server) SocketList() map[string]*Socket {
 // Shutdown closes all active sockets and triggers the Shutdown()
 // method on any Adapter that is currently set.
 func (serv *Server) Shutdown() bool {
-	slog.Info("shutting down")
 	// complete := serv.hub.shutdown()
 
 	serv.hub.shutdownCh <- true
@@ -160,12 +128,9 @@ func (serv *Server) Shutdown() bool {
 	}
 
 	if serv.hub.multihomeEnabled {
-		slog.Info("shutting down multihome backend")
 		serv.hub.multihomeBackend.Shutdown()
-		slog.Info("backend shutdown")
 	}
 
-	slog.Info("shutdown")
 	return true
 }
 
@@ -217,7 +182,7 @@ func (serv *Server) WebHandler() http.Handler {
 
 // ServeHTTP will upgrade a http request to a websocket using the sac-sock subprotocol
 func (serv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ws, err := serv.upgrader.Upgrade(w, r, nil)
+	ws, err := Accept(w, r, serv.opts)
 	if err != nil {
 		slog.Error(err.Error())
 		return
@@ -226,22 +191,7 @@ func (serv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	serv.loop(ws, request)
 }
 
-// DefaultUpgrader returns a websocket upgrader suitable for creating sacrificial-socket websockets.
-func DefaultUpgrader() *Upgrader {
-	return &Upgrader{
-		Subprotocols: []string{SubProtocol},
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-	}
-}
-
-// SetUpgrader sets the websocket.Upgrader used by the Server.
-func (serv *Server) SetUpgrader(u *Upgrader) {
-	serv.upgrader = u
-}
-
-// SetMultihomeBackend registers an Adapter interface and calls its Init() method
+// SetMultihomeBackend registers an Adapter interface and calls it's Init() method
 func (serv *Server) SetMultihomeBackend(b Adapter) {
 	serv.hub.setMultihomeBackend(b)
 }

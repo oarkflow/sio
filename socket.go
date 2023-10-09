@@ -2,6 +2,7 @@ package sio
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -59,14 +60,14 @@ func newSocketID() string {
 }
 
 func (s *Socket) receive() ([]byte, error) {
-	_, data, err := s.ws.ReadMessage()
+	_, data, err := s.ws.Read(context.Background())
 	return data, err
 }
 
-func (s *Socket) send(msgType int, data []byte) error {
+func (s *Socket) send(msgType MessageType, data []byte) error {
 	s.l.Lock()
 	defer s.l.Unlock()
-	return s.ws.WriteMessage(msgType, data)
+	return s.ws.Write(context.Background(), msgType, data)
 }
 
 // InRoom returns true if s is currently a member of roomName
@@ -163,8 +164,9 @@ func (s *Socket) ToSocket(socketID, eventName string, data any) {
 }
 
 // Emit dispatches an event to s.
-func (s *Socket) Emit(eventName string, data any) error {
-	return s.send(emitData(eventName, data))
+func (s *Socket) Emit(eventName string, data interface{}) error {
+	d, msgType := emitData(eventName, data)
+	return s.send(msgType, d)
 }
 
 // ID returns the unique ID of s
@@ -174,7 +176,7 @@ func (s *Socket) ID() string {
 
 // emitData combines the eventName and data into a payload that is understood
 // by the sac-sock protocol.
-func emitData(eventName string, data any) (int, []byte) {
+func emitData(eventName string, data interface{}) ([]byte, MessageType) {
 	buf := bytes.NewBuffer(nil)
 	buf.WriteString(eventName)
 	buf.WriteByte(startOfHeaderByte)
@@ -184,24 +186,23 @@ func emitData(eventName string, data any) (int, []byte) {
 		buf.WriteString(typeStr)
 		buf.WriteByte(startOfDataByte)
 		buf.WriteString(d)
-		return TextMessage, buf.Bytes()
+		return buf.Bytes(), MessageText
 
 	case []byte:
 		buf.WriteString(typeBin)
 		buf.WriteByte(startOfDataByte)
 		buf.Write(d)
-		return BinaryMessage, buf.Bytes()
+		return buf.Bytes(), MessageBinary
 
 	default:
 		buf.WriteString(typeJSON)
 		buf.WriteByte(startOfDataByte)
 		jsonData, err := json.Marshal(d)
 		if err != nil {
-			slog.Error(err.Error())
 		} else {
 			buf.Write(jsonData)
 		}
-		return TextMessage, buf.Bytes()
+		return buf.Bytes(), MessageText
 	}
 }
 
@@ -213,17 +214,20 @@ func (s *Socket) Close() error {
 	s.closed = true
 	s.l.Unlock()
 
-	if isAlreadyClosed { // can't reclose the socket
-		return nil
+	if isAlreadyClosed || s.ws.wroteClose {
+		return s.handleCloseCallback()
 	}
 
 	defer slog.Debug(s.ID(), "disconnected")
 
-	err := s.ws.Close()
+	err := s.ws.Close(StatusNormalClosure, "")
 	if err != nil {
 		return err
 	}
+	return s.handleCloseCallback()
+}
 
+func (s *Socket) handleCloseCallback() error {
 	rooms := s.GetRooms()
 
 	for _, room := range rooms {
