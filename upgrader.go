@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -28,13 +29,13 @@ func (e HandshakeError) Error() string { return e.message }
 type Upgrader struct {
 	// HandshakeTimeout specifies the duration for the handshake to complete.
 	HandshakeTimeout time.Duration
-	
+
 	// ReadBufferSize and WriteBufferSize specify I/O buffer sizes in bytes. If a buffer
 	// size is zero, then buffers allocated by the HTTP server are used. The
 	// I/O buffer sizes do not limit the size of the messages that can be sent
 	// or received.
 	ReadBufferSize, WriteBufferSize int
-	
+
 	// WriteBufferPool is a pool of buffers for write operations. If the value
 	// is not set, then write buffers are allocated to the connection for the
 	// lifetime of the connection.
@@ -45,7 +46,7 @@ type Upgrader struct {
 	// Applications should use a single pool for each unique value of
 	// WriteBufferSize.
 	WriteBufferPool BufferPool
-	
+
 	// Subprotocols specifies the server's supported protocols in order of
 	// preference. If this field is not nil, then the Upgrade method negotiates a
 	// subprotocol by selecting the first match in this list with a protocol
@@ -53,11 +54,11 @@ type Upgrader struct {
 	// negotiated (the Sec-Websocket-Protocol header is not included in the
 	// handshake response).
 	Subprotocols []string
-	
+
 	// Error specifies the function for generating HTTP error responses. If Error
 	// is nil, then http.Error is used to generate the HTTP response.
 	Error func(w http.ResponseWriter, r *http.Request, status int, reason error)
-	
+
 	// CheckOrigin returns true if the request Origin header is acceptable. If
 	// CheckOrigin is nil, then a safe default is used: return false if the
 	// Origin request header is present and the origin host is not equal to
@@ -66,12 +67,26 @@ type Upgrader struct {
 	// A CheckOrigin function should carefully validate the request origin to
 	// prevent cross-site request forgery.
 	CheckOrigin func(r *http.Request) bool
-	
+
 	// EnableCompression specify if the server should attempt to negotiate per
 	// message compression (RFC 7692). Setting this value to true does not
 	// guarantee that compression will be supported. Currently only "no context
 	// takeover" modes are supported.
 	EnableCompression bool
+
+	// Mutable specify if the bytes returned by ReadMessage will be overwritten in
+	// next ReadMessage.
+	//
+	// If Mutable is set to false, ReadMessage calls ioutil.ReadAll to read and
+	// return a message, and the message would be safe to be passed to other goroutines
+	// by users.
+	// Mutable is false by default to compatible with old versions.
+	//
+	// If Mutable is set to true, ReadMessage reuses a buffer to read and
+	// return the buffer to users, and the buffer will be overwritten in next ReadMessage.
+	// This is used to optimize performance.
+	// Should be aware that it's not safe to pass the mutable buffer to other goroutines.
+	Mutable bool
 }
 
 func (u *Upgrader) returnError(w http.ResponseWriter, r *http.Request, status int, reason string) (*Conn, error) {
@@ -124,27 +139,27 @@ func (u *Upgrader) selectSubprotocol(r *http.Request, responseHeader http.Header
 // response.
 func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*Conn, error) {
 	const badHandshake = "websocket: the client is not using the websocket protocol: "
-	
+
 	if !tokenListContainsValue(r.Header, "Connection", "upgrade") {
 		return u.returnError(w, r, http.StatusBadRequest, badHandshake+"'upgrade' token not found in 'Connection' header")
 	}
-	
+
 	if !tokenListContainsValue(r.Header, "Upgrade", "websocket") {
 		return u.returnError(w, r, http.StatusBadRequest, badHandshake+"'websocket' token not found in 'Upgrade' header")
 	}
-	
+
 	if r.Method != http.MethodGet {
 		return u.returnError(w, r, http.StatusMethodNotAllowed, badHandshake+"request method is not GET")
 	}
-	
+
 	if !tokenListContainsValue(r.Header, "Sec-Websocket-Version", "13") {
 		return u.returnError(w, r, http.StatusBadRequest, "websocket: unsupported version: 13 not found in 'Sec-Websocket-Version' header")
 	}
-	
+
 	if _, ok := responseHeader["Sec-Websocket-Extensions"]; ok {
 		return u.returnError(w, r, http.StatusInternalServerError, "websocket: application specific 'Sec-WebSocket-Extensions' headers are unsupported")
 	}
-	
+
 	checkOrigin := u.CheckOrigin
 	if checkOrigin == nil {
 		checkOrigin = checkSameOrigin
@@ -152,14 +167,14 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	if !checkOrigin(r) {
 		return u.returnError(w, r, http.StatusForbidden, "websocket: request origin not allowed by Upgrader.CheckOrigin")
 	}
-	
+
 	challengeKey := r.Header.Get("Sec-Websocket-Key")
 	if !isValidChallengeKey(challengeKey) {
 		return u.returnError(w, r, http.StatusBadRequest, "websocket: not a websocket handshake: 'Sec-WebSocket-Key' header must be Base64 encoded value of 16-byte in length")
 	}
-	
+
 	subprotocol := u.selectSubprotocol(r, responseHeader)
-	
+
 	// Negotiate PMCE
 	var compress bool
 	if u.EnableCompression {
@@ -171,7 +186,7 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 			break
 		}
 	}
-	
+
 	h, ok := w.(http.Hijacker)
 	if !ok {
 		return u.returnError(w, r, http.StatusInternalServerError, "websocket: response does not implement http.Hijacker")
@@ -181,41 +196,42 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	if err != nil {
 		return u.returnError(w, r, http.StatusInternalServerError, err.Error())
 	}
-	
+
 	if brw.Reader.Buffered() > 0 {
 		netConn.Close()
 		return nil, errors.New("websocket: client sent data before handshake is complete")
 	}
-	
+
 	var br *bufio.Reader
 	if u.ReadBufferSize == 0 && bufioReaderSize(netConn, brw.Reader) > 256 {
 		// Reuse hijacked buffered reader as connection reader.
 		br = brw.Reader
 	}
-	
+
 	buf := bufioWriterBuffer(netConn, brw.Writer)
-	
+
 	var writeBuf []byte
 	if u.WriteBufferPool == nil && u.WriteBufferSize == 0 && len(buf) >= maxFrameHeaderSize+256 {
 		// Reuse hijacked write buffer as connection buffer.
 		writeBuf = buf
 	}
-	
-	c := newConn(netConn, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, br, writeBuf)
+
+	c := newConn(netConn, true, u.Mutable, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, br, writeBuf)
+	c.mutable = u.Mutable
 	c.subprotocol = subprotocol
-	
+
 	if compress {
 		c.newCompressionWriter = compressNoContextTakeover
 		c.newDecompressionReader = decompressNoContextTakeover
 	}
-	
+
 	// Use larger of hijacked buffer and connection write buffer for header.
 	p := buf
 	if len(c.writeBuf) > len(p) {
 		p = c.writeBuf
 	}
 	p = p[:0]
-	
+
 	p = append(p, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "...)
 	p = append(p, computeAcceptKey(challengeKey)...)
 	p = append(p, "\r\n"...)
@@ -246,21 +262,23 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 		}
 	}
 	p = append(p, "\r\n"...)
-	
+
 	// Clear deadlines set by HTTP server.
 	netConn.SetDeadline(time.Time{})
-	
+
 	if u.HandshakeTimeout > 0 {
 		netConn.SetWriteDeadline(time.Now().Add(u.HandshakeTimeout))
 	}
-	if _, err = netConn.Write(p); err != nil {
-		netConn.Close()
+	if _, err = w.Write(p); err != nil {
+		if err := netConn.Close(); err != nil {
+			log.Printf("websocket: failed to close network connection: %v", err)
+		}
 		return nil, err
 	}
 	if u.HandshakeTimeout > 0 {
 		netConn.SetWriteDeadline(time.Time{})
 	}
-	
+
 	return c, nil
 }
 
@@ -358,8 +376,8 @@ func bufioWriterBuffer(originalWriter io.Writer, bw *bufio.Writer) []byte {
 	bw.Reset(&wh)
 	bw.WriteByte(0)
 	bw.Flush()
-	
+
 	bw.Reset(originalWriter)
-	
+
 	return wh.p[:cap(wh.p)]
 }
