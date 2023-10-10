@@ -38,6 +38,7 @@ type Config struct {
 	Error                           func(w http.ResponseWriter, r *http.Request, status int, reason error)
 	CheckOrigin                     func(r *http.Request) bool
 	EnableCompression               bool
+	Mutable                         bool
 }
 
 // Server manages the coordination between
@@ -79,6 +80,7 @@ func New(cfg ...Config) *Server {
 		upgrader.Error = config.Error
 	}
 	upgrader.EnableCompression = config.EnableCompression
+	upgrader.Mutable = config.Mutable
 	s := &Server{
 		hub:      newHub(),
 		events:   make(map[string]*event),

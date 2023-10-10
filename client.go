@@ -54,37 +54,37 @@ type Dialer struct {
 	// NetDial specifies the dial function for creating TCP connections. If
 	// NetDial is nil, net.Dial is used.
 	NetDial func(network, addr string) (net.Conn, error)
-	
+
 	// NetDialContext specifies the dial function for creating TCP connections. If
 	// NetDialContext is nil, NetDial is used.
 	NetDialContext func(ctx context.Context, network, addr string) (net.Conn, error)
-	
+
 	// NetDialTLSContext specifies the dial function for creating TLS/TCP connections. If
 	// NetDialTLSContext is nil, NetDialContext is used.
 	// If NetDialTLSContext is set, Dial assumes the TLS handshake is done there and
 	// TLSClientConfig is ignored.
 	NetDialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error)
-	
+
 	// Proxy specifies a function to return a proxy for a given
 	// Request. If the function returns a non-nil error, the
 	// request is aborted with the provided error.
 	// If Proxy is nil or returns a nil *URL, no proxy is used.
 	Proxy func(*http.Request) (*url.URL, error)
-	
+
 	// TLSClientConfig specifies the TLS configuration to use with tls.Client.
 	// If nil, the default configuration is used.
 	// If either NetDialTLS or NetDialTLSContext are set, Dial assumes the TLS handshake
 	// is done there and TLSClientConfig is ignored.
 	TLSClientConfig *tls.Config
-	
+
 	// HandshakeTimeout specifies the duration for the handshake to complete.
 	HandshakeTimeout time.Duration
-	
+
 	// ReadBufferSize and WriteBufferSize specify I/O buffer sizes in bytes. If a buffer
 	// size is zero, then a useful default size is used. The I/O buffer sizes
 	// do not limit the size of the messages that can be sent or received.
 	ReadBufferSize, WriteBufferSize int
-	
+
 	// WriteBufferPool is a pool of buffers for write operations. If the value
 	// is not set, then write buffers are allocated to the connection for the
 	// lifetime of the connection.
@@ -95,16 +95,16 @@ type Dialer struct {
 	// Applications should use a single pool for each unique value of
 	// WriteBufferSize.
 	WriteBufferPool BufferPool
-	
+
 	// Subprotocols specifies the client's requested subprotocols.
 	Subprotocols []string
-	
+
 	// EnableCompression specifies if the client should attempt to negotiate
 	// per message compression (RFC 7692). Setting this value to true does not
 	// guarantee that compression will be supported. Currently only "no context
 	// takeover" modes are supported.
 	EnableCompression bool
-	
+
 	// Jar specifies the cookie jar.
 	// If Jar is nil, cookies are not sent in requests and ignored
 	// in responses.
@@ -160,17 +160,17 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 	if d == nil {
 		d = &nilDialer
 	}
-	
+
 	challengeKey, err := generateChallengeKey()
 	if err != nil {
 		return nil, nil, err
 	}
-	
+
 	u, err := url.Parse(urlStr)
 	if err != nil {
 		return nil, nil, err
 	}
-	
+
 	switch u.Scheme {
 	case "ws":
 		u.Scheme = "http"
@@ -179,12 +179,12 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 	default:
 		return nil, nil, errMalformedURL
 	}
-	
+
 	if u.User != nil {
 		// User name and password are not allowed in websocket URIs.
 		return nil, nil, errMalformedURL
 	}
-	
+
 	req := &http.Request{
 		Method:     http.MethodGet,
 		URL:        u,
@@ -195,14 +195,14 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 		Host:       u.Host,
 	}
 	req = req.WithContext(ctx)
-	
+
 	// Set the cookies present in the cookie jar of the dialer
 	if d.Jar != nil {
 		for _, cookie := range d.Jar.Cookies(u) {
 			req.AddCookie(cookie)
 		}
 	}
-	
+
 	// Set the request headers using the capitalization for names and values in
 	// RFC examples. Although the capitalization shouldn't matter, there are
 	// servers that depend on it. The Header.Set method is not used because the
@@ -233,20 +233,20 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 			req.Header[k] = vs
 		}
 	}
-	
+
 	if d.EnableCompression {
 		req.Header["Sec-WebSocket-Extensions"] = []string{"permessage-deflate; server_no_context_takeover; client_no_context_takeover"}
 	}
-	
+
 	if d.HandshakeTimeout != 0 {
 		var cancel func()
 		ctx, cancel = context.WithTimeout(ctx, d.HandshakeTimeout)
 		defer cancel()
 	}
-	
+
 	// Get network dial function.
 	var netDial func(network, add string) (net.Conn, error)
-	
+
 	switch u.Scheme {
 	case "http":
 		if d.NetDialContext != nil {
@@ -271,14 +271,14 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 	default:
 		return nil, nil, errMalformedURL
 	}
-	
+
 	if netDial == nil {
 		netDialer := &net.Dialer{}
 		netDial = func(network, addr string) (net.Conn, error) {
 			return netDialer.DialContext(ctx, network, addr)
 		}
 	}
-	
+
 	// If needed, wrap the dial function to set the connection deadline.
 	if deadline, ok := ctx.Deadline(); ok {
 		forwardDial := netDial
@@ -295,7 +295,7 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 			return c, nil
 		}
 	}
-	
+
 	// If needed, wrap the dial function to connect through a proxy.
 	if d.Proxy != nil {
 		proxyURL, err := d.Proxy(req)
@@ -310,13 +310,13 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 			netDial = dialer.Dial
 		}
 	}
-	
+
 	hostPort, hostNoPort := hostPortNoPort(u)
 	trace := httptrace.ContextClientTrace(ctx)
 	if trace != nil && trace.GetConn != nil {
 		trace.GetConn(hostPort)
 	}
-	
+
 	netConn, err := netDial("tcp", hostPort)
 	if err != nil {
 		return nil, nil, err
@@ -326,23 +326,23 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 			Conn: netConn,
 		})
 	}
-	
+
 	defer func() {
 		if netConn != nil {
 			netConn.Close()
 		}
 	}()
-	
+
 	if u.Scheme == "https" && d.NetDialTLSContext == nil {
 		// If NetDialTLSContext is set, assume that the TLS handshake has already been done
-		
+
 		cfg := cloneTLSConfig(d.TLSClientConfig)
 		if cfg.ServerName == "" {
 			cfg.ServerName = hostNoPort
 		}
 		tlsConn := tls.Client(netConn, cfg)
 		netConn = tlsConn
-		
+
 		if trace != nil && trace.TLSHandshakeStart != nil {
 			trace.TLSHandshakeStart()
 		}
@@ -350,24 +350,24 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 		if trace != nil && trace.TLSHandshakeDone != nil {
 			trace.TLSHandshakeDone(tlsConn.ConnectionState(), err)
 		}
-		
+
 		if err != nil {
 			return nil, nil, err
 		}
 	}
-	
-	conn := newConn(netConn, false, d.ReadBufferSize, d.WriteBufferSize, d.WriteBufferPool, nil, nil)
-	
+
+	conn := newConn(netConn, false, false, d.ReadBufferSize, d.WriteBufferSize, d.WriteBufferPool, nil, nil)
+
 	if err := req.Write(netConn); err != nil {
 		return nil, nil, err
 	}
-	
+
 	if trace != nil && trace.GotFirstResponseByte != nil {
 		if peek, err := conn.br.Peek(1); err == nil && len(peek) == 1 {
 			trace.GotFirstResponseByte()
 		}
 	}
-	
+
 	resp, err := http.ReadResponse(conn.br, req)
 	if err != nil {
 		if d.TLSClientConfig != nil {
@@ -383,13 +383,13 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 		}
 		return nil, nil, err
 	}
-	
+
 	if d.Jar != nil {
 		if rc := resp.Cookies(); len(rc) > 0 {
 			d.Jar.SetCookies(u, rc)
 		}
 	}
-	
+
 	if resp.StatusCode != 101 ||
 		!tokenListContainsValue(resp.Header, "Upgrade", "websocket") ||
 		!tokenListContainsValue(resp.Header, "Connection", "upgrade") ||
@@ -402,7 +402,7 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 		resp.Body = io.NopCloser(bytes.NewReader(buf[:n]))
 		return nil, resp, ErrBadHandshake
 	}
-	
+
 	for _, ext := range parseExtensions(resp.Header) {
 		if ext[""] != "permessage-deflate" {
 			continue
@@ -416,10 +416,10 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 		conn.newDecompressionReader = decompressNoContextTakeover
 		break
 	}
-	
+
 	resp.Body = io.NopCloser(bytes.NewReader([]byte{}))
 	conn.subprotocol = resp.Header.Get("Sec-Websocket-Protocol")
-	
+
 	netConn.SetDeadline(time.Time{})
 	netConn = nil // to avoid close in defer.
 	return conn, resp, nil
