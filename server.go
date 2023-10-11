@@ -1,16 +1,16 @@
 package sio
 
 import (
-	"context"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/oarkflow/frame"
 )
 
 const ( //                        ASCII chars
@@ -35,8 +35,8 @@ type Config struct {
 	ReadBufferSize, WriteBufferSize int
 	WriteBufferPool                 BufferPool
 	Subprotocols                    []string
-	Error                           func(w http.ResponseWriter, r *http.Request, status int, reason error)
-	CheckOrigin                     func(r *http.Request) bool
+	Error                           func(ctx *frame.Context, status int, reason error)
+	CheckOrigin                     func(r *frame.Context) bool
 	EnableCompression               bool
 	Mutable                         bool
 }
@@ -51,7 +51,7 @@ type Server struct {
 	onDisconnectFunc func(*Socket) error
 	onError          func(*Socket, error)
 	l                *sync.RWMutex
-	upgrader         *Upgrader
+	upgrader         Upgrader
 }
 
 // New creates a new instance of Server
@@ -75,12 +75,13 @@ func New(cfg ...Config) *Server {
 	}
 	if len(config.Subprotocols) > 0 {
 		upgrader.Subprotocols = config.Subprotocols
+	} else {
+		upgrader.Subprotocols = []string{SubProtocol}
 	}
 	if config.Error != nil {
 		upgrader.Error = config.Error
 	}
 	upgrader.EnableCompression = config.EnableCompression
-	upgrader.Mutable = config.Mutable
 	s := &Server{
 		hub:      newHub(),
 		events:   make(map[string]*event),
@@ -210,36 +211,31 @@ func (serv *Server) OnDisconnect(handleFunc func(*Socket) error) {
 	serv.onDisconnectFunc = handleFunc
 }
 
-// WebHandler returns a http.Handler to be passed into http.Handle
-//
-// Depricated: The Server struct now satisfies the http.Handler interface, use that instead
-func (serv *Server) WebHandler() http.Handler {
-	return serv
-}
-
-// ServeHTTP will upgrade a http request to a websocket using the sac-sock subprotocol
-func (serv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ws, err := serv.upgrader.Upgrade(w, r, nil)
+// Handle will upgrade a http request to a websocket using the sac-sock subprotocol
+func (serv *Server) Handle(ctx *frame.Context) {
+	err := serv.upgrader.Upgrade(ctx, func(ws *Conn) {
+		serv.loop(ws)
+	})
 	if err != nil {
 		slog.Error(err.Error())
 		return
 	}
-	request := r.Clone(context.Background())
-	serv.loop(ws, request)
 }
 
 // DefaultUpgrader returns a websocket upgrader suitable for creating sacrificial-socket websockets.
-func DefaultUpgrader() *Upgrader {
-	return &Upgrader{
-		Subprotocols: []string{SubProtocol},
-		CheckOrigin: func(r *http.Request) bool {
+func DefaultUpgrader() Upgrader {
+	return Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(ctx *frame.Context) bool {
 			return true
 		},
+		Subprotocols: []string{SubProtocol},
 	}
 }
 
 // SetUpgrader sets the websocket.Upgrader used by the Server.
-func (serv *Server) SetUpgrader(u *Upgrader) {
+func (serv *Server) SetUpgrader(u Upgrader) {
 	serv.upgrader = u
 }
 
@@ -275,14 +271,13 @@ func (serv *Server) ToSocket(socketID, eventName string, data any) {
 
 // loop handles all the coordination between new sockets
 // reading frames and dispatching events
-func (serv *Server) loop(ws *Conn, r *http.Request) {
-	s := newSocket(serv, ws, r)
+func (serv *Server) loop(ws *Conn) {
+	s := newSocket(serv, ws)
 	slog.Info("connected", "id", s.ID())
 
 	defer s.Close()
 
 	s.Join("__socket_id:" + s.ID())
-
 	serv.l.RLock()
 	e := serv.onConnectFunc
 	serv.l.RUnlock()
@@ -293,7 +288,9 @@ func (serv *Server) loop(ws *Conn, r *http.Request) {
 			serv.onError(s, err)
 		}
 	}
-
+	ws.SetReadLimit(512)
+	ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+	ws.SetPongHandler(func(string) error { ws.SetReadDeadline(time.Now().Add(60 * time.Second)); return nil })
 	for {
 		msg, err := s.receive()
 		if ignorableError(err) {
