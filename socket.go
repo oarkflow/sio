@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oarkflow/frame/pkg/websocket"
+
 	"github.com/oarkflow/sio/internal/bpool"
 	"github.com/oarkflow/sio/internal/maps"
 )
@@ -20,7 +22,7 @@ var (
 type Socket struct {
 	l            *sync.RWMutex
 	id           string
-	ws           *Conn
+	ws           *websocket.Conn
 	closed       bool
 	serv         *Server
 	roomsl       *sync.RWMutex
@@ -39,7 +41,7 @@ const (
 	typeStr         = "S"
 )
 
-func newSocket(serv *Server, ws *Conn) *Socket {
+func newSocket(serv *Server, ws *websocket.Conn) *Socket {
 	s := &Socket{
 		l:          &sync.RWMutex{},
 		id:         newSocketID(),
@@ -82,8 +84,8 @@ func (s *Socket) Ping() error {
 		case <-s.pingTicker.C:
 			buf := bpool.Get()
 			defer bpool.Put(buf)
-			buf.WriteString(fmt.Sprintf("%d", PongMessage))
-			s.ws.WriteMessage(TextMessage, buf.Bytes())
+			buf.WriteString(fmt.Sprintf("%d", websocket.PongMessage))
+			s.ws.WriteMessage(websocket.TextMessage, buf.Bytes())
 		}
 	}
 }
@@ -199,13 +201,13 @@ func emitData(eventName string, data any) (int, []byte) {
 		buf.WriteString(typeStr)
 		buf.WriteByte(startOfDataByte)
 		buf.WriteString(d)
-		return TextMessage, buf.Bytes()
+		return websocket.TextMessage, buf.Bytes()
 
 	case []byte:
 		buf.WriteString(typeBin)
 		buf.WriteByte(startOfDataByte)
 		buf.Write(d)
-		return BinaryMessage, buf.Bytes()
+		return websocket.BinaryMessage, buf.Bytes()
 
 	default:
 		buf.WriteString(typeJSON)
@@ -216,7 +218,7 @@ func emitData(eventName string, data any) (int, []byte) {
 		} else {
 			buf.Write(jsonData)
 		}
-		return TextMessage, buf.Bytes()
+		return websocket.TextMessage, buf.Bytes()
 	}
 }
 
