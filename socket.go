@@ -1,13 +1,15 @@
 package sio
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
+	"github.com/oarkflow/sio/internal/bpool"
 	"github.com/oarkflow/sio/internal/maps"
 )
 
@@ -17,15 +19,18 @@ var (
 
 // Socket represents a websocket connection
 type Socket struct {
-	l       *sync.RWMutex
-	id      string
-	ws      *Conn
-	closed  bool
-	serv    *Server
-	roomsl  *sync.RWMutex
-	request *http.Request
-	context *maps.Map[string, any]
-	rooms   map[string]bool
+	l            *sync.RWMutex
+	id           string
+	ws           *Conn
+	closed       bool
+	serv         *Server
+	roomsl       *sync.RWMutex
+	request      *http.Request
+	context      *maps.Map[string, any]
+	rooms        map[string]bool
+	pingTicker   *time.Ticker
+	tickerDone   chan bool
+	pingInterval time.Duration
 }
 
 const (
@@ -38,17 +43,20 @@ const (
 
 func newSocket(serv *Server, ws *Conn, r *http.Request) *Socket {
 	s := &Socket{
-		l:       &sync.RWMutex{},
-		id:      newSocketID(),
-		ws:      ws,
-		closed:  false,
-		serv:    serv,
-		roomsl:  &sync.RWMutex{},
-		rooms:   make(map[string]bool),
-		context: maps.New[string, any](100000),
-		request: r,
+		l:          &sync.RWMutex{},
+		id:         newSocketID(),
+		ws:         ws,
+		closed:     false,
+		serv:       serv,
+		roomsl:     &sync.RWMutex{},
+		rooms:      make(map[string]bool),
+		context:    maps.New[string, any](100000),
+		request:    r,
+		pingTicker: time.NewTicker(5 * time.Second),
+		tickerDone: make(chan bool),
 	}
 	serv.hub.addSocket(s)
+	go s.Ping()
 	return s
 }
 
@@ -67,6 +75,20 @@ func (s *Socket) send(msgType int, data []byte) error {
 	s.l.Lock()
 	defer s.l.Unlock()
 	return s.ws.WriteMessage(msgType, data)
+}
+
+func (s *Socket) Ping() error {
+	for {
+		select {
+		case <-s.tickerDone:
+			return nil
+		case <-s.pingTicker.C:
+			buf := bpool.Get()
+			defer bpool.Put(buf)
+			buf.WriteString(fmt.Sprintf("%d", PongMessage))
+			s.ws.WriteMessage(TextMessage, buf.Bytes())
+		}
+	}
 }
 
 // InRoom returns true if s is currently a member of roomName
@@ -175,7 +197,8 @@ func (s *Socket) ID() string {
 // emitData combines the eventName and data into a payload that is understood
 // by the sac-sock protocol.
 func emitData(eventName string, data any) (int, []byte) {
-	buf := bytes.NewBuffer(nil)
+	buf := bpool.Get()
+	defer bpool.Put(buf)
 	buf.WriteString(eventName)
 	buf.WriteByte(startOfHeaderByte)
 
@@ -241,5 +264,9 @@ func (s *Socket) Close() error {
 	}
 
 	s.serv.hub.removeSocket(s)
+	if s.pingTicker != nil {
+		s.pingTicker.Stop()
+		s.tickerDone <- true
+	}
 	return nil
 }
