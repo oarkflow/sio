@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 //
-// This file may have been modified by CloudWeGo authors. All CloudWeGo
-// Modifications are Copyright 2022 CloudWeGo Authors.
+// This file may have been modified by Frame authors. All Frame
+// Modifications are Copyright 2022 Frame Authors.
 
 package sio
 
@@ -23,7 +23,7 @@ const (
 
 var (
 	flateWriterPools [maxCompressionLevel - minCompressionLevel + 1]sync.Pool
-	flateReaderPool  = sync.Pool{New: func() any {
+	flateReaderPool  = sync.Pool{New: func() interface{} {
 		return flate.NewReader(nil)
 	}}
 )
@@ -34,7 +34,7 @@ func decompressNoContextTakeover(r io.Reader) io.ReadCloser {
 	"\x00\x00\xff\xff" +
 		// Add final block to squelch unexpected EOF error from flate reader.
 		"\x01\x00\x00\xff\xff"
-	
+
 	fr, _ := flateReaderPool.Get().(io.ReadCloser)
 	fr.(flate.Resetter).Reset(io.MultiReader(r, strings.NewReader(tail)), nil)
 	return &flateReadWrapper{fr}
@@ -66,7 +66,7 @@ type truncWriter struct {
 
 func (w *truncWriter) Write(p []byte) (int, error) {
 	n := 0
-	
+
 	// fill buffer first for simplicity.
 	if w.n < len(w.p) {
 		n = copy(w.p[w.n:], p)
@@ -76,16 +76,16 @@ func (w *truncWriter) Write(p []byte) (int, error) {
 			return n, nil
 		}
 	}
-	
+
 	m := len(p)
 	if m > len(w.p) {
 		m = len(w.p)
 	}
-	
+
 	if nn, err := w.w.Write(w.p[:m]); err != nil {
 		return n + nn, err
 	}
-	
+
 	copy(w.p[:], w.p[m:])
 	copy(w.p[len(w.p)-m:], p[len(p)-m:])
 	nn, err := w.w.Write(p[:len(p)-m])

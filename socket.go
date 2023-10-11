@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 
@@ -25,7 +24,6 @@ type Socket struct {
 	closed       bool
 	serv         *Server
 	roomsl       *sync.RWMutex
-	request      *http.Request
 	context      *maps.Map[string, any]
 	rooms        map[string]bool
 	pingTicker   *time.Ticker
@@ -41,7 +39,7 @@ const (
 	typeStr         = "S"
 )
 
-func newSocket(serv *Server, ws *Conn, r *http.Request) *Socket {
+func newSocket(serv *Server, ws *Conn) *Socket {
 	s := &Socket{
 		l:          &sync.RWMutex{},
 		id:         newSocketID(),
@@ -51,7 +49,6 @@ func newSocket(serv *Server, ws *Conn, r *http.Request) *Socket {
 		roomsl:     &sync.RWMutex{},
 		rooms:      make(map[string]bool),
 		context:    maps.New[string, any](100000),
-		request:    r,
 		pingTicker: time.NewTicker(5 * time.Second),
 		tickerDone: make(chan bool),
 	}
@@ -97,11 +94,6 @@ func (s *Socket) InRoom(roomName string) bool {
 	defer s.roomsl.RUnlock()
 	inRoom := s.rooms[roomName]
 	return inRoom
-}
-
-// Request get request
-func (s *Socket) Request() *http.Request {
-	return s.request
 }
 
 // Set get request

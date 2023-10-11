@@ -1,6 +1,9 @@
 // Copyright 2017 The Gorilla WebSocket Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+//
+// This file may have been modified by Frame authors. All Frame
+// Modifications are Copyright 2022 Frame Authors.
 
 package sio
 
@@ -46,13 +49,13 @@ func NewPreparedMessage(messageType int, data []byte) (*PreparedMessage, error) 
 		frames:      make(map[prepareKey]*preparedFrame),
 		data:        data,
 	}
-	
+
 	// Prepare a plain server frame.
 	_, frameData, err := pm.frame(prepareKey{isServer: true, compress: false})
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// To protect against caller modifying the data argument, remember the data
 	// copied to the plain server frame.
 	pm.data = frameData[len(frameData)-len(data):]
@@ -67,7 +70,7 @@ func (pm *PreparedMessage) frame(key prepareKey) (int, []byte, error) {
 		pm.frames[key] = frame
 	}
 	pm.mu.Unlock()
-	
+
 	var err error
 	frame.once.Do(func() {
 		// Prepare a frame using a 'fake' connection.
