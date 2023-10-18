@@ -289,9 +289,9 @@ func (serv *Server) loop(ws *websocket.Conn) {
 			serv.onError(s, err)
 		}
 	}
-	ws.SetReadLimit(512)
-	ws.SetReadDeadline(time.Now().Add(60 * time.Second))
-	ws.SetPongHandler(func(string) error { ws.SetReadDeadline(time.Now().Add(60 * time.Second)); return nil })
+	// ws.SetReadLimit(512)
+	// ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+	// ws.SetPongHandler(func(string) error { ws.SetReadDeadline(time.Now().Add(60 * time.Second)); return nil })
 	for {
 		msg, err := s.receive()
 		if ignorableError(err) {
