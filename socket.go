@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
+
+	"github.com/oarkflow/frame/pkg/websocket"
 
 	"github.com/oarkflow/sio/internal/bpool"
 	"github.com/oarkflow/sio/internal/maps"
@@ -21,11 +22,10 @@ var (
 type Socket struct {
 	l            *sync.RWMutex
 	id           string
-	ws           *Conn
+	ws           *websocket.Conn
 	closed       bool
 	serv         *Server
 	roomsl       *sync.RWMutex
-	request      *http.Request
 	context      *maps.Map[string, any]
 	rooms        map[string]bool
 	pingTicker   *time.Ticker
@@ -41,7 +41,7 @@ const (
 	typeStr         = "S"
 )
 
-func newSocket(serv *Server, ws *Conn, r *http.Request) *Socket {
+func newSocket(serv *Server, ws *websocket.Conn) *Socket {
 	s := &Socket{
 		l:          &sync.RWMutex{},
 		id:         newSocketID(),
@@ -51,7 +51,6 @@ func newSocket(serv *Server, ws *Conn, r *http.Request) *Socket {
 		roomsl:     &sync.RWMutex{},
 		rooms:      make(map[string]bool),
 		context:    maps.New[string, any](100000),
-		request:    r,
 		pingTicker: time.NewTicker(5 * time.Second),
 		tickerDone: make(chan bool),
 	}
@@ -85,8 +84,8 @@ func (s *Socket) Ping() error {
 		case <-s.pingTicker.C:
 			buf := bpool.Get()
 			defer bpool.Put(buf)
-			buf.WriteString(fmt.Sprintf("%d", PongMessage))
-			s.ws.WriteMessage(TextMessage, buf.Bytes())
+			buf.WriteString(fmt.Sprintf("%d", websocket.PongMessage))
+			s.ws.WriteMessage(websocket.TextMessage, buf.Bytes())
 		}
 	}
 }
@@ -97,11 +96,6 @@ func (s *Socket) InRoom(roomName string) bool {
 	defer s.roomsl.RUnlock()
 	inRoom := s.rooms[roomName]
 	return inRoom
-}
-
-// Request get request
-func (s *Socket) Request() *http.Request {
-	return s.request
 }
 
 // Set get request
@@ -207,13 +201,13 @@ func emitData(eventName string, data any) (int, []byte) {
 		buf.WriteString(typeStr)
 		buf.WriteByte(startOfDataByte)
 		buf.WriteString(d)
-		return TextMessage, buf.Bytes()
+		return websocket.TextMessage, buf.Bytes()
 
 	case []byte:
 		buf.WriteString(typeBin)
 		buf.WriteByte(startOfDataByte)
 		buf.Write(d)
-		return BinaryMessage, buf.Bytes()
+		return websocket.BinaryMessage, buf.Bytes()
 
 	default:
 		buf.WriteString(typeJSON)
@@ -224,7 +218,7 @@ func emitData(eventName string, data any) (int, []byte) {
 		} else {
 			buf.Write(jsonData)
 		}
-		return TextMessage, buf.Bytes()
+		return websocket.TextMessage, buf.Bytes()
 	}
 }
 
