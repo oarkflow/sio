@@ -215,7 +215,7 @@ func (serv *Server) OnDisconnect(handleFunc func(*Socket) error) {
 // Handle will upgrade a http request to a websocket using the sac-sock subprotocol
 func (serv *Server) Handle(ctx *frame.Context) {
 	err := serv.upgrader.Upgrade(ctx, func(ws *websocket.Conn) {
-		serv.loop(ws)
+		serv.loop(ctx, ws)
 	})
 	if err != nil {
 		slog.Error(err.Error())
@@ -272,8 +272,8 @@ func (serv *Server) ToSocket(socketID, eventName string, data any) {
 
 // loop handles all the coordination between new sockets
 // reading frames and dispatching events
-func (serv *Server) loop(ws *websocket.Conn) {
-	s := newSocket(serv, ws)
+func (serv *Server) loop(ctx *frame.Context, ws *websocket.Conn) {
+	s := newSocket(serv, ctx, ws)
 	slog.Info("connected", "id", s.ID())
 
 	defer s.Close()

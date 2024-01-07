@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oarkflow/frame"
 	"github.com/oarkflow/frame/pkg/websocket"
 
 	"github.com/oarkflow/sio/internal/bpool"
@@ -31,6 +32,7 @@ type Socket struct {
 	pingTicker   *time.Ticker
 	tickerDone   chan bool
 	pingInterval time.Duration
+	Ctx          *frame.Context
 }
 
 const (
@@ -41,7 +43,7 @@ const (
 	typeStr         = "S"
 )
 
-func newSocket(serv *Server, ws *websocket.Conn) *Socket {
+func newSocket(serv *Server, ctx *frame.Context, ws *websocket.Conn) *Socket {
 	s := &Socket{
 		l:          &sync.RWMutex{},
 		id:         newSocketID(),
@@ -53,6 +55,7 @@ func newSocket(serv *Server, ws *websocket.Conn) *Socket {
 		context:    maps.New[string, any](100000),
 		pingTicker: time.NewTicker(5 * time.Second),
 		tickerDone: make(chan bool),
+		Ctx:        ctx,
 	}
 	serv.hub.addSocket(s)
 	go s.Ping()
