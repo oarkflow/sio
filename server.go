@@ -185,7 +185,15 @@ type EventHandler interface {
 // Any event functions registered with On, must be safe for concurrent use by multiple
 // go routines
 func (serv *Server) On(eventName string, handleFunc func(*Socket, []byte)) {
+	serv.l.Lock()
+	defer serv.l.Unlock()
 	serv.events[eventName] = &event{eventName, handleFunc} // you think you can handle the func?
+}
+
+func (serv *Server) Off(eventName string) {
+	serv.l.Lock()
+	defer serv.l.Unlock()
+	delete(serv.events, eventName)
 }
 
 // OnEvent has the same functionality as On, but accepts

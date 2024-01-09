@@ -1,7 +1,6 @@
 package sio
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,14 +8,11 @@ import (
 	"time"
 
 	"github.com/oarkflow/frame"
+	"github.com/oarkflow/frame/pkg/common/xid"
 	"github.com/oarkflow/frame/pkg/websocket"
 
 	"github.com/oarkflow/sio/internal/bpool"
 	"github.com/oarkflow/sio/internal/maps"
-)
-
-var (
-	socketRNG = NewRNG()
 )
 
 // Socket represents a websocket connection
@@ -36,8 +32,6 @@ type Socket struct {
 }
 
 const (
-	idLen int = 24
-
 	typeJSON string = "J"
 	typeBin         = "B"
 	typeStr         = "S"
@@ -46,7 +40,7 @@ const (
 func newSocket(serv *Server, ctx *frame.Context, ws *websocket.Conn) *Socket {
 	s := &Socket{
 		l:          &sync.RWMutex{},
-		id:         newSocketID(),
+		id:         xid.New().String(),
 		ws:         ws,
 		closed:     false,
 		serv:       serv,
@@ -60,12 +54,6 @@ func newSocket(serv *Server, ctx *frame.Context, ws *websocket.Conn) *Socket {
 	serv.hub.addSocket(s)
 	go s.Ping()
 	return s
-}
-
-func newSocketID() string {
-	idBuf := make([]byte, idLen)
-	socketRNG.Read(idBuf)
-	return base64.StdEncoding.EncodeToString(idBuf)
 }
 
 func (s *Socket) receive() ([]byte, error) {
