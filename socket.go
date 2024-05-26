@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/oarkflow/frame"
-	"github.com/oarkflow/frame/pkg/common/xid"
 	"github.com/oarkflow/frame/pkg/websocket"
+	"github.com/oarkflow/xid"
 
 	"github.com/oarkflow/sio/internal/bpool"
 	"github.com/oarkflow/sio/internal/maps"
