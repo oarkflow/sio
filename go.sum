@@ -24,6 +24,8 @@ github.com/oarkflow/frame v0.0.69 h1:JaPp73A6KMVPwz6cZ7D8+5+mmbw0po/u5YXc6JWG/9c
 github.com/oarkflow/frame v0.0.69/go.mod h1:rcIskN3uuvgVHvAp+t4fdQLefrytHeWj/ZKNsRVonPM=
 github.com/oarkflow/log v1.0.83 h1:T/38wvjuNeVJ9PDo0wJDTnTUQZ5XeqlcvpbCItuFFJo=
 github.com/oarkflow/log v1.0.83/go.mod h1:dMn57z9uq11Y264cx9c9Ac7ska9qM+EBhn4qf9CNlsM=
+github.com/oarkflow/maps v0.0.0-20240406152114-fc5a94538f01 h1:2U3KpUUHKyKNcc9wR6S5xMffSbHv9T42qPMFTXimLXE=
+github.com/oarkflow/maps v0.0.0-20240406152114-fc5a94538f01/go.mod h1:ku/3mpezSm5g3rBuU2U3UPpzBhJ86SY/mhvvliTTWg4=
 github.com/oarkflow/xid v1.2.8 h1:uCIX61Binq2RPMsqImZM6pPGzoZTmRyD6jguxF9aAA0=
 github.com/oarkflow/xid v1.2.8/go.mod h1:jG4YBh+swbjlWApGWDBYnsJEa7hi3CCpmuqhB3RAxVo=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

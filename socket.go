@@ -11,8 +11,9 @@ import (
 	"github.com/oarkflow/frame/pkg/websocket"
 	"github.com/oarkflow/xid"
 
+	"github.com/oarkflow/maps"
+
 	"github.com/oarkflow/sio/internal/bpool"
-	"github.com/oarkflow/sio/internal/maps"
 )
 
 // Socket represents a websocket connection
@@ -23,7 +24,7 @@ type Socket struct {
 	closed       bool
 	serv         *Server
 	roomsl       *sync.RWMutex
-	context      *maps.Map[string, any]
+	context      maps.IMap[string, any]
 	rooms        map[string]bool
 	pingTicker   *time.Ticker
 	tickerDone   chan bool
@@ -91,7 +92,7 @@ func (s *Socket) InRoom(roomName string) bool {
 
 // Set get request
 func (s *Socket) Set(key string, val any) {
-	s.context.Put(key, val)
+	s.context.Set(key, val)
 }
 
 // Get gets value
@@ -100,7 +101,7 @@ func (s *Socket) Get(key string) (any, bool) {
 }
 
 // Context gets value
-func (s *Socket) Context() *maps.Map[string, any] {
+func (s *Socket) Context() maps.IMap[string, any] {
 	return s.context
 }
 

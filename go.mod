@@ -15,6 +15,7 @@ require (
 	github.com/cloudwego/netpoll v0.6.0 // indirect
 	github.com/nyaruka/phonenumbers v1.6.3 // indirect
 	github.com/oarkflow/log v1.0.83 // indirect
+	github.com/oarkflow/maps v0.0.0-20240406152114-fc5a94538f01
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	golang.org/x/exp v0.0.0-20250606033433-dcc06ee1d476 // indirect
