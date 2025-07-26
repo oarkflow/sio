@@ -74,6 +74,10 @@ type Server struct {
 	// Pending file metadata for uploads
 	pendingFileMeta   map[string]*FileSharePayload // clientID -> metadata
 	pendingFileMetaMu sync.Mutex
+
+	// Pending media metadata for uploads (audio/video/screen)
+	pendingMediaMeta   map[string]*MediaSharePayload // clientID -> metadata
+	pendingMediaMetaMu sync.Mutex
 }
 
 // Config represents server configuration
@@ -145,6 +149,7 @@ func NewServer(config *Config) *Server {
 		ctx:                ctx,
 		cancel:             cancel,
 		pendingFileMeta:    make(map[string]*FileSharePayload),
+		pendingMediaMeta:   make(map[string]*MediaSharePayload),
 	}
 
 	// Create custom WebSocket server with user info extraction
@@ -340,41 +345,62 @@ func (s *Server) handleNewConnectionWithUser(conn *websocket.Conn, userID, usern
 	// Set up connection handlers
 	conn.OnMessage(func(conn *websocket.Conn, messageType websocket.MessageType, data []byte) {
 		if messageType == websocket.TextMessage {
-			// Try to parse as file metadata
+			// Try to parse as file or media metadata
 			var msg ChatMessage
-			if err := json.Unmarshal(data, &msg); err == nil && msg.Type == FileShare {
-				// Store metadata for next binary message
-				var meta FileSharePayload
-				if err := s.parsePayload(msg.Payload, &meta); err == nil {
-					// Use currentRoom from client if RoomID is not set
-					if meta.RoomID == "" {
-						for roomID := range client.Rooms {
-							meta.RoomID = roomID
-							break
+			if err := json.Unmarshal(data, &msg); err == nil {
+				if msg.Type == FileShare {
+					// Store file metadata for next binary message
+					var meta FileSharePayload
+					if err := s.parsePayload(msg.Payload, &meta); err == nil {
+						if meta.RoomID == "" {
+							for roomID := range client.Rooms {
+								meta.RoomID = roomID
+								break
+							}
 						}
+						s.pendingFileMetaMu.Lock()
+						s.pendingFileMeta[client.ID] = &meta
+						s.pendingFileMetaMu.Unlock()
 					}
-					s.pendingFileMetaMu.Lock()
-					s.pendingFileMeta[client.ID] = &meta
-					s.pendingFileMetaMu.Unlock()
+				} else if msg.Type == MediaShare {
+					// Store media metadata for next binary message
+					var meta MediaSharePayload
+					if err := s.parsePayload(msg.Payload, &meta); err == nil {
+						if meta.RoomID == "" {
+							for roomID := range client.Rooms {
+								meta.RoomID = roomID
+								break
+							}
+						}
+						s.pendingMediaMetaMu.Lock()
+						s.pendingMediaMeta[client.ID] = &meta
+						s.pendingMediaMetaMu.Unlock()
+					}
 				}
 			}
 			// Always call handleMessage for normal text messages
 			s.handleMessage(client, data)
 		} else if messageType == websocket.BinaryMessage {
-			var meta *FileSharePayload
-			for i := 0; i < 10; i++ {
-				s.pendingFileMetaMu.Lock()
-				meta = s.pendingFileMeta[client.ID]
-				if meta != nil {
-					delete(s.pendingFileMeta, client.ID)
-					s.pendingFileMetaMu.Unlock()
-					break
-				}
-				s.pendingFileMetaMu.Unlock()
-				time.Sleep(10 * time.Millisecond)
+			var fileMeta *FileSharePayload
+			var mediaMeta *MediaSharePayload
+			// Check for file metadata
+			s.pendingFileMetaMu.Lock()
+			fileMeta = s.pendingFileMeta[client.ID]
+			if fileMeta != nil {
+				delete(s.pendingFileMeta, client.ID)
 			}
-			if meta != nil {
-				s.handleBinaryMessage(client, data, meta.FileType, meta.FileName, meta.RoomID)
+			s.pendingFileMetaMu.Unlock()
+			// Check for media metadata
+			s.pendingMediaMetaMu.Lock()
+			mediaMeta = s.pendingMediaMeta[client.ID]
+			if mediaMeta != nil {
+				delete(s.pendingMediaMeta, client.ID)
+			}
+			s.pendingMediaMetaMu.Unlock()
+			if fileMeta != nil {
+				s.handleBinaryMessage(client, data, fileMeta.FileType, fileMeta.FileName, fileMeta.RoomID)
+			} else if mediaMeta != nil {
+				s.handleBinaryMediaMessage(client, data, mediaMeta)
 			} else {
 				s.sendError(client, 400, "No file metadata for binary upload", "Send metadata before binary data")
 			}
@@ -1602,6 +1628,24 @@ func (s *Server) handleFileShareFromHTTP(userID string, msg *ChatMessage) {
 	s.handleFileShare(client, msg)
 }
 
+// handleMediaShareFromHTTP handles media sharing from HTTP upload
+func (s *Server) handleMediaShareFromHTTP(userID string, msg *ChatMessage) {
+	s.clientsMu.RLock()
+	var client *Client
+	for _, c := range s.clients {
+		if c.UserID == userID {
+			client = c
+			break
+		}
+	}
+	s.clientsMu.RUnlock()
+	if client == nil {
+		log.Printf("Client not found for userID: %s", userID)
+		return
+	}
+	s.handleMediaShare(client, msg)
+}
+
 // GetRoomMembers returns online members of a room
 func (s *Server) GetRoomMembers(roomID string) []map[string]interface{} {
 	s.roomsMu.RLock()
@@ -1716,6 +1760,69 @@ func (s *Server) handleBinaryMessage(client *Client, data []byte, fileType, file
 	s.sendMessage(client, ChatMessage{
 		Type:      Acknowledgment,
 		RoomID:    roomID,
+		MessageID: fileID,
+		Timestamp: time.Now(),
+		Payload: AckPayload{
+			MessageID: fileID,
+			Status:    StatusSent,
+		},
+	})
+}
+
+// handleBinaryMediaMessage handles binary uploads for media_share
+func (s *Server) handleBinaryMediaMessage(client *Client, data []byte, meta *MediaSharePayload) {
+	fileID := s.generateMessageID()
+	var ext string
+	switch meta.MediaType {
+	case "audio":
+		ext = ".webm"
+	case "video":
+		ext = ".webm"
+	case "screen":
+		ext = ".webm"
+	default:
+		ext = ""
+	}
+	storedName := fileID + ext
+	_, err := s.saveUploadedFile(data, storedName)
+	if err != nil {
+		s.sendError(client, 500, "Failed to save media", err.Error())
+		return
+	}
+	fileURL := "/files/" + storedName
+
+	// Save to database with fileUrl
+	dbMessage := &DBMessage{
+		ID:          fileID,
+		RoomID:      meta.RoomID,
+		SenderID:    client.UserID,
+		Content:     "[Media uploaded]",
+		Timestamp:   time.Now(),
+		MessageType: string(MediaShare),
+		MediaType:   &meta.MediaType,
+		MediaData:   nil, // Not storing base64, just URL
+		FileURL:     &fileURL,
+	}
+	s.db.SaveMessage(s.ctx, dbMessage)
+
+	msg := ChatMessage{
+		Type:      MediaShare,
+		RoomID:    meta.RoomID,
+		Timestamp: time.Now(),
+		Payload: MediaSharePayload{
+			MessageID: fileID,
+			UserID:    client.UserID,
+			Username:  client.Username,
+			MediaType: meta.MediaType,
+			MediaData: "", // Not sending base64
+			FileURL:   fileURL,
+			RoomID:    meta.RoomID,
+		},
+	}
+	s.broadcastToRoom(meta.RoomID, msg, "")
+	s.sendMessage(client, ChatMessage{
+		Type:      Acknowledgment,
+		RoomID:    meta.RoomID,
 		MessageID: fileID,
 		Timestamp: time.Now(),
 		Payload: AckPayload{

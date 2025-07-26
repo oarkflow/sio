@@ -298,33 +298,45 @@ func (h *HTTPHandler) FileUploadHandler(w http.ResponseWriter, r *http.Request) 
 
 		// Generate a unique file ID
 		fileID := h.generateFileID()
-
-		// In a real implementation, you would save to disk/cloud storage
-		// For now, we'll encode to base64 for storage in memory/database
 		fileDataB64 := base64.StdEncoding.EncodeToString(fileData)
-
-		// Create file message and send through WebSocket
 		messageID := h.generateMessageID()
 
-		// Create file share message
-		fileShareMsg := &ChatMessage{
-			Type:      FileShare,
-			RoomID:    roomID,
-			MessageID: messageID,
-			Payload: FileSharePayload{
-				FileName:  fileHeader.Filename,
-				FileSize:  fileHeader.Size,
-				FileType:  fileHeader.Header.Get("Content-Type"),
-				FileData:  fileDataB64,
-				UserID:    userID,
-				Username:  username,
+		mediaType := r.FormValue("mediaType")
+		if mediaType != "" {
+			// Handle media_share (audio/video/screen)
+			mediaShareMsg := &ChatMessage{
+				Type:      MediaShare,
+				RoomID:    roomID,
 				MessageID: messageID,
-			},
-			Timestamp: time.Now(),
+				Payload: MediaSharePayload{
+					MediaType: mediaType,
+					MediaData: fileDataB64,
+					UserID:    userID,
+					Username:  username,
+					MessageID: messageID,
+				},
+				Timestamp: time.Now(),
+			}
+			h.server.handleMediaShareFromHTTP(userID, mediaShareMsg)
+		} else {
+			// Handle file_share (default)
+			fileShareMsg := &ChatMessage{
+				Type:      FileShare,
+				RoomID:    roomID,
+				MessageID: messageID,
+				Payload: FileSharePayload{
+					FileName:  fileHeader.Filename,
+					FileSize:  fileHeader.Size,
+					FileType:  fileHeader.Header.Get("Content-Type"),
+					FileData:  fileDataB64,
+					UserID:    userID,
+					Username:  username,
+					MessageID: messageID,
+				},
+				Timestamp: time.Now(),
+			}
+			h.server.handleFileShareFromHTTP(userID, fileShareMsg)
 		}
-
-		// Send file message through chat server
-		h.server.handleFileShareFromHTTP(userID, fileShareMsg)
 
 		// Create file info for response (without the actual data)
 		fileInfo := map[string]interface{}{
@@ -364,6 +376,111 @@ func (h *HTTPHandler) fileServerHandler(w http.ResponseWriter, r *http.Request) 
 	io.Copy(w, file)
 }
 
+// List all online users
+func (h *HTTPHandler) GetUsersHandler(w http.ResponseWriter, r *http.Request) {
+	h.server.clientsMu.RLock()
+	defer h.server.clientsMu.RUnlock()
+	users := make([]map[string]string, 0, len(h.server.clients))
+	for _, client := range h.server.clients {
+		users = append(users, map[string]string{
+			"userId":   client.UserID,
+			"username": client.Username,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"users": users,
+		"count": len(users),
+	})
+}
+
+// Delete a room
+func (h *HTTPHandler) DeleteRoomHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	roomID := strings.TrimPrefix(r.URL.Path, "/api/rooms/")
+	if roomID == "" {
+		http.Error(w, "Room ID required", http.StatusBadRequest)
+		return
+	}
+	// TODO: Check permissions (only owner/admin)
+	err := h.server.db.DeleteRoom(r.Context(), roomID)
+	if err != nil {
+		http.Error(w, "Failed to delete room", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Invite user to room
+func (h *HTTPHandler) InviteUserHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	roomID := strings.TrimPrefix(r.URL.Path, "/api/rooms/")
+	roomID = strings.TrimSuffix(roomID, "/invite")
+	var req struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+		http.Error(w, "userId required", http.StatusBadRequest)
+		return
+	}
+	// TODO: Check permissions (only owner/admin)
+	err := h.server.db.AddRoomMember(r.Context(), &DBRoomMember{RoomID: roomID, UserID: req.UserID, Role: "member", JoinedAt: time.Now()})
+	if err != nil {
+		http.Error(w, "Failed to invite user", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Remove user from room
+func (h *HTTPHandler) RemoveUserHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	roomID := strings.TrimPrefix(r.URL.Path, "/api/rooms/")
+	roomID = strings.TrimSuffix(roomID, "/remove")
+	var req struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+		http.Error(w, "userId required", http.StatusBadRequest)
+		return
+	}
+	// TODO: Check permissions (only owner/admin)
+	err := h.server.db.RemoveRoomMember(r.Context(), roomID, req.UserID)
+	if err != nil {
+		http.Error(w, "Failed to remove user", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Ban user from room
+func (h *HTTPHandler) BanUserHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	roomID := strings.TrimPrefix(r.URL.Path, "/api/rooms/")
+	roomID = strings.TrimSuffix(roomID, "/ban")
+	var req struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+		http.Error(w, "userId required", http.StatusBadRequest)
+		return
+	}
+	// TODO: Implement ban logic in DB (e.g., add to banned list)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // SetupRoutes sets up HTTP routes for the chat API
 func (h *HTTPHandler) SetupRoutes(mux *http.ServeMux) {
 	// WebSocket endpoint
@@ -382,6 +499,14 @@ func (h *HTTPHandler) SetupRoutes(mux *http.ServeMux) {
 			h.GetMessagesHandler(w, r)
 		} else if strings.HasSuffix(r.URL.Path, "/members") {
 			h.GetRoomMembersHandler(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/invite") {
+			h.InviteUserHandler(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/remove") {
+			h.RemoveUserHandler(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/ban") {
+			h.BanUserHandler(w, r)
+		} else if r.Method == http.MethodDelete {
+			h.DeleteRoomHandler(w, r)
 		} else if strings.Contains(r.URL.Path, "/threads") {
 			h.GetThreadHandler(w, r)
 		} else {
@@ -396,6 +521,9 @@ func (h *HTTPHandler) SetupRoutes(mux *http.ServeMux) {
 
 	// File server for uploaded files
 	mux.HandleFunc("/files/", h.fileServerHandler)
+
+	// Users endpoint
+	mux.HandleFunc("/api/users", h.GetUsersHandler)
 }
 
 // CORS middleware

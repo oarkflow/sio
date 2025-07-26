@@ -144,6 +144,8 @@ type MediaSharePayload struct {
 	UserID    string `json:"userId"`
 	Username  string `json:"username"`
 	MessageID string `json:"messageId"`
+	RoomID    string `json:"roomId,omitempty"`
+	FileURL   string `json:"fileUrl,omitempty"`
 }
 
 // CallInvitePayload for video call invitations

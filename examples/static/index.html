@@ -226,6 +226,55 @@
             cursor: not-allowed;
         }
 
+        /* User list panel styles */
+        .user-list-panel {
+            position: fixed;
+            top: 4.5rem;
+            right: 1rem;
+            z-index: 1000;
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 1rem;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            min-width: 180px;
+            max-width: 250px;
+            max-height: 60vh;
+            overflow: auto;
+            display: none;
+        }
+
+        .user-list-panel ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .user-list-panel li {
+            padding: 0.25rem 0;
+            border-bottom: 1px solid #e5e7eb;
+            font-size: 0.9rem;
+            color: #374151;
+        }
+
+        .user-list-panel li:last-child {
+            border-bottom: none;
+        }
+
+        .user-list-panel button {
+            background: #4f46e5;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-left: 0.5rem;
+        }
+
+        .user-list-panel button:hover {
+            background: #4338ca;
+        }
+
         @media (max-width: 600px) {
             .chat-container {
                 width: 100%;
@@ -284,6 +333,24 @@
         </div>
     </div>
 
+    <!-- User list panel -->
+    <div class="user-list-panel" id="userListPanel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+            <span style="font-weight:bold;">Users</span>
+            <button id="refreshUserListBtn"
+                style="background:#4f46e5;color:white;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:0.8rem;">
+                ⟳
+            </button>
+        </div>
+        <ul id="userList" style="list-style:none;padding:0;margin:0;"></ul>
+    </div>
+
+    <!-- Toggle button for user list -->
+    <button id="userListToggleBtn"
+        style="position:fixed;top:1rem;right:1rem;z-index:11;background:#4f46e5;color:white;border:none;border-radius:50%;width:2.5rem;height:2.5rem;font-size:1.2rem;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        👥
+    </button>
+
     <script>
         let ws = null;
         let currentUser = null;
@@ -307,9 +374,14 @@
         const audioBtn = document.getElementById('audioBtn');
         const videoBtn = document.getElementById('videoBtn');
         const screenBtn = document.getElementById('screenBtn');
+        const userListPanel = document.getElementById('userListPanel');
+        const userListToggleBtn = document.getElementById('userListToggleBtn');
 
         // Global array to store all messages for the current room
         let allMessages = [];
+
+        // Set to track currently typing users
+        let typingUsers = new Set();
 
         // Generate a random user ID
         function generateUserId() {
@@ -469,7 +541,75 @@
             }
         }
 
-        // Join a room
+        // --- User List Panel ---
+        // Ensure user list panel is always on top and visible
+        userListPanel.style.display = 'none';
+        userListPanel.style.position = 'fixed';
+        userListPanel.style.top = '4.5rem';
+        userListPanel.style.right = '1rem';
+        userListPanel.style.zIndex = '1000';
+        userListToggleBtn.style.position = 'fixed';
+        userListToggleBtn.style.top = '1rem';
+        userListToggleBtn.style.right = '1rem';
+        userListToggleBtn.style.zIndex = '1001';
+
+        // Always update user list panel when toggled
+        userListToggleBtn.onclick = () => {
+            userListPanel.style.display = userListPanel.style.display === 'none' ? 'block' : 'none';
+            if (userListPanel.style.display === 'block') fetchAndRenderUserList();
+        };
+        document.getElementById('refreshUserListBtn').onclick = fetchAndRenderUserList;
+
+        function fetchAndRenderUserList() {
+            fetch('/api/users')
+                .then(res => res.json())
+                .then(data => {
+                    const userList = document.getElementById('userList');
+                    userList.innerHTML = '';
+                    (data.users || []).forEach(user => {
+                        const li = document.createElement('li');
+                        li.textContent = `${user.username} (${user.userId})`;
+                        userList.appendChild(li);
+                    });
+                    if ((data.users || []).length === 0) {
+                        userList.innerHTML = '<li style="color:#888;">No users online</li>';
+                    }
+                })
+                .catch(() => {
+                    const userList = document.getElementById('userList');
+                    userList.innerHTML = '<li style="color:#e00;">Failed to load users</li>';
+                });
+        }
+
+        // --- Typing Indicator for Multiple Users ---
+        // Always show typingIndicator and update its text
+        function updateTypingIndicator() {
+            const names = Array.from(typingUsers);
+            let text = '';
+            if (names.length === 1) {
+                text = `${names[0]} is typing...`;
+            } else if (names.length === 2) {
+                text = `${names[0]} and ${names[1]} are typing...`;
+            } else if (names.length === 3) {
+                text = `${names[0]}, ${names[1]} and ${names[2]} are typing...`;
+            } else if (names.length > 3) {
+                text = `${names.slice(0, 3).join(', ')} and more are typing...`;
+            }
+            typingIndicator.style.display = text ? 'block' : 'none';
+            typingIndicator.textContent = text;
+        }
+
+        function showTypingIndicator(username) {
+            typingUsers.add(username);
+            updateTypingIndicator();
+        }
+
+        function hideTypingIndicator(username) {
+            typingUsers.delete(username);
+            updateTypingIndicator();
+        }
+
+        // When joining a new room, clear typing users
         function joinRoom(roomId, element = null) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 return;
@@ -507,6 +647,9 @@
                 type: 'join_room',
                 roomId: roomId
             });
+
+            typingUsers.clear();
+            updateTypingIndicator();
         }
 
         // Send a chat message
@@ -582,7 +725,8 @@
             audioRecorder.ondataavailable = e => audioChunks.push(e.data);
             audioRecorder.onstop = () => {
                 const blob = new Blob(audioChunks, { type: 'audio/webm' });
-                ws.send(blob);
+                // 1. Send metadata first
+                const msgId = generateMessageId();
                 sendWebSocketMessage({
                     type: 'media_share',
                     roomId: currentRoom,
@@ -590,9 +734,13 @@
                         mediaType: 'audio',
                         userId: currentUser.id,
                         username: currentUser.username,
-                        messageId: generateMessageId()
+                        messageId: msgId
                     }
                 });
+                // 2. Then send the binary data after a short delay
+                setTimeout(() => {
+                    ws.send(blob);
+                }, 50);
             };
             audioRecorder.start();
             audioBtn.textContent = '⏹️';
@@ -612,7 +760,7 @@
             videoRecorder.ondataavailable = e => videoChunks.push(e.data);
             videoRecorder.onstop = () => {
                 const blob = new Blob(videoChunks, { type: 'video/webm' });
-                ws.send(blob);
+                const msgId = generateMessageId();
                 sendWebSocketMessage({
                     type: 'media_share',
                     roomId: currentRoom,
@@ -620,9 +768,12 @@
                         mediaType: 'video',
                         userId: currentUser.id,
                         username: currentUser.username,
-                        messageId: generateMessageId()
+                        messageId: msgId
                     }
                 });
+                setTimeout(() => {
+                    ws.send(blob);
+                }, 50);
             };
             videoRecorder.start();
             videoBtn.textContent = '⏹️';
@@ -642,7 +793,7 @@
             screenRecorder.ondataavailable = e => screenChunks.push(e.data);
             screenRecorder.onstop = () => {
                 const blob = new Blob(screenChunks, { type: 'video/webm' });
-                ws.send(blob);
+                const msgId = generateMessageId();
                 sendWebSocketMessage({
                     type: 'media_share',
                     roomId: currentRoom,
@@ -650,9 +801,12 @@
                         mediaType: 'screen',
                         userId: currentUser.id,
                         username: currentUser.username,
-                        messageId: generateMessageId()
+                        messageId: msgId
                     }
                 });
+                setTimeout(() => {
+                    ws.send(blob);
+                }, 50);
             };
             screenRecorder.start();
             screenBtn.textContent = '⏹️';
@@ -762,17 +916,6 @@
             clearTimeout(typingTimeout);
         }
 
-        function showTypingIndicator(username) {
-            typingIndicator.textContent = `${username} is typing...`;
-        }
-
-        function hideTypingIndicator(username) {
-            if (typingIndicator.textContent.includes(username)) {
-                typingIndicator.textContent = '';
-            }
-        }
-
-        // Update connection status
         function updateConnectionStatus(text, status) {
             connectionStatus.textContent = text;
             connectionStatus.className = `connection-status ${status}`;
@@ -796,6 +939,11 @@
             if (e.key === 'Enter') {
                 connect();
             }
+        });
+
+        userListToggleBtn.addEventListener('click', () => {
+            userListPanel.style.display = userListPanel.style.display === 'none' ? 'block' : 'none';
+            if (userListPanel.style.display === 'block') fetchAndRenderUserList();
         });
 
         // Focus username input on load
