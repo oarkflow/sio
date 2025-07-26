@@ -12,7 +12,6 @@ require (
 	github.com/andeya/goutil v1.0.1 // indirect
 	github.com/bytedance/go-tagexpr/v2 v2.9.11 // indirect
 	github.com/bytedance/gopkg v0.1.2 // indirect
-	github.com/cloudwego/netpoll v0.6.0 // indirect
 	github.com/nyaruka/phonenumbers v1.6.3 // indirect
 	github.com/oarkflow/log v1.0.83 // indirect
 	github.com/oarkflow/maps v0.0.0-20240406152114-fc5a94538f01
