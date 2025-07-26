@@ -1,11 +1,16 @@
 package chat
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/oarkflow/sio/websocket"
 )
@@ -24,9 +29,26 @@ func NewHTTPHandler(server *Server) *HTTPHandler {
 
 // WebSocketHandler handles WebSocket upgrade requests
 func (h *HTTPHandler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
-	// For now, return an error indicating that direct WebSocket upgrades are not supported
-	// Users should connect directly to the WebSocket server
-	http.Error(w, "WebSocket upgrades should connect directly to the WebSocket server", http.StatusNotImplemented)
+	// Extract user info from query parameters
+	userID := r.URL.Query().Get("user_id")
+	username := r.URL.Query().Get("username")
+
+	// Validate required parameters
+	if userID == "" {
+		userID = fmt.Sprintf("user_%d", time.Now().Unix())
+	}
+	if username == "" {
+		username = fmt.Sprintf("User_%d", time.Now().Unix()%1000)
+	}
+
+	log.Printf("WebSocket upgrade request - UserID: %s, Username: %s", userID, username)
+
+	// Create a custom upgrader - simplified approach
+	// In production, you'd use a proper websocket library like gorilla/websocket
+	http.Error(w, "WebSocket upgrade not fully implemented - connect directly to WebSocket server", http.StatusNotImplemented)
+
+	// TODO: Implement proper WebSocket upgrade with user info extraction
+	// For now, the client should connect directly to the WebSocket server
 } // upgradeConnection manually upgrades the HTTP connection to WebSocket
 func (h *HTTPHandler) upgradeConnection(w http.ResponseWriter, r *http.Request, userID, username string) (*websocket.Conn, error) {
 	// This is a simplified version - in practice, you'd use the websocket server's upgrade logic
@@ -130,6 +152,28 @@ func (h *HTTPHandler) GetThreadHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(messages)
 }
 
+// GetRoomMembersHandler returns members of a room
+func (h *HTTPHandler) GetRoomMembersHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract room ID from URL path
+	path := strings.TrimPrefix(r.URL.Path, "/api/rooms/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 || parts[1] != "members" {
+		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		return
+	}
+	roomID := parts[0]
+
+	// Get online users from server
+	members := h.server.GetRoomMembers(roomID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"roomId":  roomID,
+		"members": members,
+		"count":   len(members),
+	})
+}
+
 // CreateRoomHandler creates a new room
 func (h *HTTPHandler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -220,23 +264,63 @@ func (h *HTTPHandler) FileUploadHandler(w http.ResponseWriter, r *http.Request) 
 	for _, fileHeader := range files {
 		file, err := fileHeader.Open()
 		if err != nil {
+			log.Printf("Error opening file %s: %v", fileHeader.Filename, err)
 			continue
 		}
 		defer file.Close()
+
+		// Validate file size (limit to 10MB)
+		if fileHeader.Size > 10*1024*1024 {
+			http.Error(w, fmt.Sprintf("File %s is too large (max 10MB)", fileHeader.Filename), http.StatusRequestEntityTooLarge)
+			return
+		}
 
 		// Read file data
 		fileData := make([]byte, fileHeader.Size)
 		_, err = file.Read(fileData)
 		if err != nil {
+			log.Printf("Error reading file %s: %v", fileHeader.Filename, err)
 			continue
 		}
 
-		// Create file info
+		// Generate a unique file ID
+		fileID := h.generateFileID()
+
+		// In a real implementation, you would save to disk/cloud storage
+		// For now, we'll encode to base64 for storage in memory/database
+		fileDataB64 := base64.StdEncoding.EncodeToString(fileData)
+
+		// Create file message and send through WebSocket
+		messageID := h.generateMessageID()
+
+		// Create file share message
+		fileShareMsg := &ChatMessage{
+			Type:      FileShare,
+			RoomID:    roomID,
+			MessageID: messageID,
+			Payload: FileSharePayload{
+				FileName:  fileHeader.Filename,
+				FileSize:  fileHeader.Size,
+				FileType:  fileHeader.Header.Get("Content-Type"),
+				FileData:  fileDataB64,
+				UserID:    userID,
+				Username:  username,
+				MessageID: messageID,
+			},
+			Timestamp: time.Now(),
+		}
+
+		// Send file message through chat server
+		h.server.handleFileShareFromHTTP(userID, fileShareMsg)
+
+		// Create file info for response (without the actual data)
 		fileInfo := map[string]interface{}{
-			"fileName": fileHeader.Filename,
-			"fileSize": fileHeader.Size,
-			"fileType": fileHeader.Header.Get("Content-Type"),
-			"fileData": fileData, // Would normally save to storage and return URL
+			"fileId":    fileID,
+			"fileName":  fileHeader.Filename,
+			"fileSize":  fileHeader.Size,
+			"fileType":  fileHeader.Header.Get("Content-Type"),
+			"messageId": messageID,
+			"url":       fmt.Sprintf("/api/files/%s", fileID), // Would be actual file URL
 		}
 
 		uploadedFiles = append(uploadedFiles, fileInfo)
@@ -268,6 +352,8 @@ func (h *HTTPHandler) SetupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/rooms/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/messages") {
 			h.GetMessagesHandler(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/members") {
+			h.GetRoomMembersHandler(w, r)
 		} else if strings.Contains(r.URL.Path, "/threads") {
 			h.GetThreadHandler(w, r)
 		} else {
@@ -311,4 +397,20 @@ func (h *HTTPHandler) StartHTTPServer(addr string) error {
 	}
 
 	return server.ListenAndServe()
+}
+
+// Helper methods
+
+// generateFileID generates a unique file ID
+func (h *HTTPHandler) generateFileID() string {
+	bytes := make([]byte, 16)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
+}
+
+// generateMessageID generates a unique message ID
+func (h *HTTPHandler) generateMessageID() string {
+	bytes := make([]byte, 16)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
 }

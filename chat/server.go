@@ -16,6 +16,12 @@ import (
 	"github.com/oarkflow/sio/websocket"
 )
 
+// UserInfo represents user information for WebSocket connections
+type UserInfo struct {
+	UserID   string
+	Username string
+}
+
 // Server represents the chat server
 type Server struct {
 	config   *Config
@@ -27,6 +33,10 @@ type Server struct {
 	rooms     map[string]*Room   // roomID -> Room
 	clientsMu sync.RWMutex
 	roomsMu   sync.RWMutex
+
+	// Pending connections with user info
+	pendingConnections   map[string]UserInfo // connKey -> UserInfo
+	pendingConnectionsMu sync.RWMutex
 
 	// Rate limiting
 	rateLimiters map[string]*RateLimit // clientID -> RateLimit
@@ -102,15 +112,16 @@ func NewServer(config *Config) *Server {
 	}
 
 	server := &Server{
-		config:        config,
-		db:            config.Database,
-		clients:       make(map[string]*Client),
-		rooms:         make(map[string]*Room),
-		rateLimiters:  make(map[string]*RateLimit),
-		typingClients: make(map[string]map[string]time.Time),
-		security:      config.Security,
-		ctx:           ctx,
-		cancel:        cancel,
+		config:             config,
+		db:                 config.Database,
+		clients:            make(map[string]*Client),
+		rooms:              make(map[string]*Room),
+		pendingConnections: make(map[string]UserInfo),
+		rateLimiters:       make(map[string]*RateLimit),
+		typingClients:      make(map[string]map[string]time.Time),
+		security:           config.Security,
+		ctx:                ctx,
+		cancel:             cancel,
 	}
 
 	// Create custom WebSocket server with user info extraction
@@ -224,9 +235,15 @@ func (s *Server) initializeDefaultRooms() error {
 
 // handleNewConnection handles a new WebSocket connection
 func (s *Server) handleNewConnection(conn *websocket.Conn) {
-	// Extract user info from the connection URL or create default
-	userID := fmt.Sprintf("user_%d", time.Now().Unix())
+	// Extract user info from the connection URL query parameters
+	userID := "user_" + fmt.Sprintf("%d", time.Now().Unix())
 	username := fmt.Sprintf("User_%d", time.Now().Unix()%1000)
+
+	// Try to get the original request to extract query parameters
+	// Note: This is a simplified approach. In a real implementation,
+	// you'd need to modify the websocket package to pass the original request
+	// For now, we'll use the default values but log that we should extract them
+	log.Printf("New WebSocket connection - using default user info. UserID: %s, Username: %s", userID, username)
 
 	s.handleNewConnectionWithUser(conn, userID, username)
 }
@@ -1412,4 +1429,81 @@ func (s *Server) GetRoomMessages(ctx context.Context, roomID string, limit, offs
 // GetThreadMessages retrieves thread messages
 func (s *Server) GetThreadMessages(ctx context.Context, parentMessageID string) ([]*DBMessage, error) {
 	return s.db.GetThreadMessages(ctx, parentMessageID)
+}
+
+// handleFileShareFromHTTP handles file sharing from HTTP upload
+func (s *Server) handleFileShareFromHTTP(userID string, msg *ChatMessage) {
+	// Find the client by userID
+	s.clientsMu.RLock()
+	var client *Client
+	for _, c := range s.clients {
+		if c.UserID == userID {
+			client = c
+			break
+		}
+	}
+	s.clientsMu.RUnlock()
+
+	if client == nil {
+		log.Printf("Client not found for userID: %s", userID)
+		return
+	}
+
+	// Handle the file share message
+	s.handleFileShare(client, msg)
+}
+
+// GetRoomMembers returns online members of a room
+func (s *Server) GetRoomMembers(roomID string) []map[string]interface{} {
+	s.roomsMu.RLock()
+	room, exists := s.rooms[roomID]
+	s.roomsMu.RUnlock()
+
+	if !exists {
+		return []map[string]interface{}{}
+	}
+
+	var members []map[string]interface{}
+	for _, client := range room.Clients {
+		member := map[string]interface{}{
+			"userId":   client.UserID,
+			"username": client.Username,
+			"clientId": client.ID,
+			"isOnline": true,
+			"lastSeen": client.LastSeen,
+		}
+		members = append(members, member)
+	}
+
+	return members
+}
+
+// HandleWebSocketUpgrade handles WebSocket upgrade with user info extraction
+func (s *Server) HandleWebSocketUpgrade(w http.ResponseWriter, r *http.Request) {
+	// Extract user info from query parameters
+	userID := r.URL.Query().Get("user_id")
+	username := r.URL.Query().Get("username")
+
+	// Validate and set defaults if needed
+	if userID == "" {
+		userID = fmt.Sprintf("user_%d", time.Now().Unix())
+	}
+	if username == "" {
+		username = fmt.Sprintf("User_%d", time.Now().Unix()%1000)
+	}
+
+	log.Printf("WebSocket upgrade request - UserID: %s, Username: %s", userID, username)
+
+	// Store user info for the connection
+	s.pendingConnectionsMu.Lock()
+	connKey := fmt.Sprintf("%s:%s", r.RemoteAddr, userID)
+	s.pendingConnections[connKey] = UserInfo{
+		UserID:   userID,
+		Username: username,
+	}
+	s.pendingConnectionsMu.Unlock()
+
+	// For now, redirect to the WebSocket server
+	// In a full implementation, you'd handle the upgrade here
+	http.Error(w, "Connect directly to WebSocket server with user info", http.StatusBadRequest)
 }
