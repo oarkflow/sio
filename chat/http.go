@@ -236,6 +236,16 @@ func (h *HTTPHandler) FileUploadHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Enable CORS for this endpoint
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST")
+	w.Header().Set("Access-Control-Allow-Headers", "X-User-ID, X-Username, Content-Type")
+
+	// Handle preflight OPTIONS request
+	if r.Method == http.MethodOptions {
+		return
+	}
+
 	// Parse multipart form data (limit to 50MB)
 	if err := r.ParseMultipartForm(50 << 20); err != nil {
 		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
