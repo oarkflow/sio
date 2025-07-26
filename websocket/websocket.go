@@ -2,6 +2,9 @@ package websocket
 
 import (
 	"bufio"
+	"bytes"
+	"compress/flate"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/tls"
@@ -10,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+
 	"net"
 	"net/http"
 	"net/url"
@@ -128,6 +133,23 @@ type Config struct {
 	EnableCompression bool
 	CompressionLevel  int
 
+	// Per-message compression (RFC 7692)
+	PerMessageDeflate          bool
+	PMDServerNoContextTakeover bool
+	PMDClientNoContextTakeover bool
+	PMDMaxWindowBits           int
+	PMDClientMaxWindowBits     int
+	PMDServerMaxWindowBits     int
+	// Application-level keep-alive/idle
+	IdleTimeout time.Duration
+
+	// Backpressure
+	WriteQueueSize int
+	WriteRateLimit int // messages/sec
+
+	// Room/Topic management
+	EnableRooms bool
+
 	// TLS
 	TLSConfig *tls.Config
 }
@@ -171,6 +193,9 @@ type Conn struct {
 	isServer bool
 	isClient bool
 
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	// Connection state
 	mu          sync.RWMutex
 	closed      bool
@@ -188,9 +213,10 @@ type Conn struct {
 	messageType   MessageType
 
 	// Keep-alive
-	pingTicker *time.Ticker
-	pongTimer  *time.Timer
-	pongCh     chan bool
+	pingTicker      *time.Ticker
+	pongTimer       *time.Timer
+	pongCh          chan bool
+	keepAliveStopCh chan struct{}
 
 	// Event handlers - default handlers
 	onOpen    OpenHandler
@@ -203,6 +229,44 @@ type Conn struct {
 	// Custom event handlers
 	customHandlers map[string]EventHandler
 	eventMu        sync.RWMutex
+
+	// Per-message compression
+	compressionEnabled   bool
+	decompressor         interface{}
+	compressor           interface{}
+	negotiatedExtensions map[string]string
+	// ...existing fields...
+	// Fragmentation
+	fragmentedWriteMu         sync.Mutex
+	fragmentedWriteInProgress bool
+
+	// Backpressure
+	writeQueue       chan *Frame
+	writeRateLimiter *time.Ticker
+
+	// Application-level keep-alive
+	idleTimer     *time.Timer
+	onIdleTimeout func(conn *Conn)
+
+	// Negotiated subprotocol
+	negotiatedSubprotocol string
+}
+
+// setupCompression initializes zlib compressor/decompressor for permessage-deflate
+func (c *Conn) setupCompression() error {
+	if !c.compressionEnabled {
+		return nil
+	}
+	// Window bits and context takeover negotiation (stub)
+	// TODO: Parse c.negotiatedExtensions["permessage-deflate"] for params
+	// For now, use default flate settings
+	comp, err := flate.NewWriter(nil, flate.DefaultCompression)
+	if err != nil {
+		return err
+	}
+	c.compressor = comp
+	// Decompressor will be created per-frame as needed
+	return nil
 }
 
 // Server represents a WebSocket server
@@ -220,6 +284,99 @@ type Server struct {
 	running  bool
 	stopCh   chan struct{}
 	connPool sync.Pool
+
+	// Room management
+	roomsMu sync.RWMutex
+	rooms   map[string]map[*Conn]struct{}
+
+	// Extension negotiation
+	supportedExtensions map[string]bool
+}
+
+// ExtensionInfo holds negotiated extension parameters
+type ExtensionInfo struct {
+	Name   string
+	Params map[string]string
+}
+
+// Room management API
+func (s *Server) JoinRoom(room string, c *Conn) {
+	s.roomsMu.Lock()
+	defer s.roomsMu.Unlock()
+	if s.rooms == nil {
+		s.rooms = make(map[string]map[*Conn]struct{})
+	}
+	if s.rooms[room] == nil {
+		s.rooms[room] = make(map[*Conn]struct{})
+	}
+	s.rooms[room][c] = struct{}{}
+}
+
+func (s *Server) LeaveRoom(room string, c *Conn) {
+	s.roomsMu.Lock()
+	defer s.roomsMu.Unlock()
+	if s.rooms != nil && s.rooms[room] != nil {
+		delete(s.rooms[room], c)
+		if len(s.rooms[room]) == 0 {
+			delete(s.rooms, room)
+		}
+	}
+}
+
+func (s *Server) BroadcastToRoom(room string, messageType MessageType, data []byte) {
+	s.roomsMu.RLock()
+	conns := s.rooms[room]
+	s.roomsMu.RUnlock()
+	for c := range conns {
+		c.WriteMessage(messageType, data)
+	}
+}
+
+// Conn API for negotiated subprotocol and extensions
+func (c *Conn) NegotiatedSubprotocol() string {
+	return c.negotiatedSubprotocol
+}
+
+func (c *Conn) NegotiatedExtensions() map[string]string {
+	return c.negotiatedExtensions
+}
+
+// Fragmented message write API
+func (c *Conn) WriteFragmented(messageType MessageType, data []byte, fragmentSize int) error {
+	c.fragmentedWriteMu.Lock()
+	defer c.fragmentedWriteMu.Unlock()
+	if c.fragmentedWriteInProgress {
+		return errors.New("fragmented write already in progress")
+	}
+	c.fragmentedWriteInProgress = true
+	defer func() { c.fragmentedWriteInProgress = false }()
+	total := len(data)
+	for i := 0; i < total; i += fragmentSize {
+		end := i + fragmentSize
+		if end > total {
+			end = total
+		}
+		fin := end == total
+		opcode := byte(messageType)
+		if i > 0 {
+			opcode = OpcodeContinuation
+		}
+		frame := &Frame{
+			FIN:     fin,
+			Opcode:  opcode,
+			Payload: data[i:end],
+			Masked:  c.isClient,
+		}
+		if err := c.writeFrame(frame); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Application-level keep-alive/idle timeout hook
+func (c *Conn) OnIdleTimeout(f func(conn *Conn)) {
+	c.onIdleTimeout = f
 }
 
 // Client represents a WebSocket client
@@ -243,7 +400,8 @@ func NewServer(config *Config) *Server {
 		stopCh: make(chan struct{}),
 		connPool: sync.Pool{
 			New: func() interface{} {
-				return &Conn{}
+				ctx, cancel := context.WithCancel(context.Background())
+				return &Conn{ctx: ctx, cancel: cancel}
 			},
 		},
 	}
@@ -357,21 +515,53 @@ func (s *Server) upgrade(netConn net.Conn) (*Conn, error) {
 	// Negotiate subprotocol
 	subprotocol := s.negotiateSubprotocol(req)
 
-	// Send handshake response
-	if err := s.writeHandshakeResponse(netConn, acceptKey, subprotocol); err != nil {
+	// Negotiate extensions (permessage-deflate)
+	extHeader := req.Header.Get("Sec-WebSocket-Extensions")
+	negotiatedExtensions := make(map[string]string)
+	compressionEnabled := false
+	if s.config.EnableCompression && extHeader != "" {
+		exts := strings.Split(extHeader, ",")
+		for _, ext := range exts {
+			ext = strings.TrimSpace(ext)
+			if strings.HasPrefix(ext, "permessage-deflate") {
+				compressionEnabled = true
+				negotiatedExtensions["permessage-deflate"] = ext
+				break
+			}
+		}
+	}
+
+	// Write handshake response with negotiated extensions
+	response := "HTTP/1.1 101 Switching Protocols\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Accept: " + acceptKey + "\r\n"
+	if subprotocol != "" {
+		response += "Sec-WebSocket-Protocol: " + subprotocol + "\r\n"
+	}
+	if compressionEnabled {
+		response += "Sec-WebSocket-Extensions: permessage-deflate\r\n"
+	}
+	response += "\r\n"
+	if _, err := netConn.Write([]byte(response)); err != nil {
 		return nil, err
 	}
 
-	// Create WebSocket connection
+	ctx, cancel := context.WithCancel(context.Background())
 	conn := &Conn{
-		conn:           netConn,
-		config:         s.config,
-		isServer:       true,
-		reader:         reader,
-		writer:         bufio.NewWriter(netConn),
-		messageBuffer:  make([]byte, 0, s.config.ReadBufferSize),
-		pongCh:         make(chan bool, 1),
-		customHandlers: make(map[string]EventHandler),
+		conn:                  netConn,
+		config:                s.config,
+		isServer:              true,
+		reader:                reader,
+		writer:                bufio.NewWriter(netConn),
+		messageBuffer:         make([]byte, 0, s.config.ReadBufferSize),
+		pongCh:                make(chan bool, 1),
+		customHandlers:        make(map[string]EventHandler),
+		negotiatedSubprotocol: subprotocol,
+		negotiatedExtensions:  negotiatedExtensions,
+		compressionEnabled:    compressionEnabled,
+		ctx:                   ctx,
+		cancel:                cancel,
 	}
 
 	// Set default event handlers
@@ -644,7 +834,7 @@ func (c *Conn) setDefaultHandlers() {
 
 	// Default error handler
 	c.onError = func(conn *Conn, err error) {
-		// Log error or handle as needed
+		fmt.Fprintf(os.Stderr, "[websocket] error: %v\n", err)
 	}
 }
 
@@ -670,6 +860,9 @@ func (c *Conn) handleConnection() {
 
 		messageType, data, err := c.ReadMessage()
 		if err != nil {
+			if c.isClosed() {
+				break
+			}
 			if c.onError != nil {
 				c.onError(c, err)
 			}
@@ -765,6 +958,10 @@ func (c *Conn) ReadMessage() (MessageType, []byte, error) {
 
 // readFrame reads a single WebSocket frame
 func (c *Conn) readFrame() (*Frame, error) {
+	// Set read deadline if configured
+	if c.config != nil && c.config.HandshakeTimeout > 0 {
+		c.conn.SetReadDeadline(time.Now().Add(c.config.HandshakeTimeout))
+	}
 	// Read first two bytes (header)
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(c.reader, header); err != nil {
@@ -786,14 +983,14 @@ func (c *Conn) readFrame() (*Frame, error) {
 	}
 
 	// Validate masking (clients must mask, servers must not)
-	if c.isServer && frame.Masked {
-		// Server expects masked frames from client
-	} else if c.isClient && !frame.Masked {
-		// Client expects unmasked frames from server
-	} else if c.isServer && !frame.Masked {
-		return nil, ErrInvalidFrame
-	} else if c.isClient && frame.Masked {
-		return nil, ErrInvalidFrame
+	if c.isServer {
+		if !frame.Masked {
+			return nil, ErrInvalidFrame
+		}
+	} else if c.isClient {
+		if frame.Masked {
+			return nil, ErrInvalidFrame
+		}
 	}
 
 	// Read payload length
@@ -915,6 +1112,19 @@ func (c *Conn) WriteClose(code CloseCode, reason string) error {
 
 // writeFrame writes a single frame to the connection
 func (c *Conn) writeFrame(frame *Frame) error {
+	// Set write deadline if configured
+	if c.config != nil && c.config.HandshakeTimeout > 0 {
+		c.conn.SetWriteDeadline(time.Now().Add(c.config.HandshakeTimeout))
+	}
+	// Compress payload if permessage-deflate is enabled and not a control frame
+	if c.compressionEnabled && (frame.Opcode == OpcodeText || frame.Opcode == OpcodeBinary) {
+		var b bytes.Buffer
+		comp, _ := flate.NewWriter(&b, flate.DefaultCompression)
+		comp.Write(frame.Payload)
+		comp.Close()
+		frame.Payload = b.Bytes()
+		frame.RSV1 = true
+	}
 	// Calculate frame size
 	headerSize := 2
 	if len(frame.Payload) > MaxPayload16Bit {
@@ -1014,17 +1224,16 @@ func (c *Conn) startKeepAlive() {
 	}
 
 	c.pingTicker = time.NewTicker(c.config.PingInterval)
+	c.keepAliveStopCh = make(chan struct{})
 
 	go func() {
 		defer c.pingTicker.Stop()
-
 		for {
 			select {
 			case <-c.pingTicker.C:
 				if c.isClosed() {
 					return
 				}
-
 				// Send ping
 				if err := c.WritePing(nil); err != nil {
 					if c.onError != nil {
@@ -1032,42 +1241,55 @@ func (c *Conn) startKeepAlive() {
 					}
 					return
 				}
-
 				// Start pong timeout
 				if c.config.PongTimeout > 0 {
 					c.pongTimer = time.NewTimer(c.config.PongTimeout)
-
 					select {
 					case <-c.pongCh:
-						// Pong received
 						c.pongTimer.Stop()
 					case <-c.pongTimer.C:
-						// Pong timeout
 						c.close(CloseGoingAway, "pong timeout")
+						return
+					case <-c.ctx.Done():
 						return
 					}
 				}
-
-			case <-c.stopKeepAlive():
+			case <-c.keepAliveStopCh:
+				return
+			case <-c.ctx.Done():
 				return
 			}
 		}
 	}()
 }
 
+// Extension is a plugin interface for protocol extensions
+type Extension interface {
+	Name() string
+	Negotiate(client, server map[string]string) (map[string]string, error)
+	WrapConn(c *Conn) error
+}
+
+// Example: permessage-deflate extension plugin stub
+type PerMessageDeflateExtension struct{}
+
+func (e *PerMessageDeflateExtension) Name() string {
+	return "permessage-deflate"
+}
+
+func (e *PerMessageDeflateExtension) Negotiate(client, server map[string]string) (map[string]string, error) {
+	// TODO: implement negotiation logic
+	return map[string]string{"enabled": "true"}, nil
+}
+
+func (e *PerMessageDeflateExtension) WrapConn(c *Conn) error {
+	// TODO: wrap Conn for compression
+	return nil
+}
+
 // stopKeepAlive returns a channel that signals keep-alive should stop
 func (c *Conn) stopKeepAlive() <-chan struct{} {
-	ch := make(chan struct{})
-	go func() {
-		for {
-			if c.isClosed() {
-				close(ch)
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
-	return ch
+	return c.keepAliveStopCh
 }
 
 // Close closes the connection gracefully
@@ -1091,6 +1313,10 @@ func (c *Conn) close(code CloseCode, reason string) error {
 	// Send close frame
 	c.WriteClose(code, reason)
 
+	// Unblock any reads by setting deadlines
+	c.conn.SetReadDeadline(time.Now())
+	c.conn.SetWriteDeadline(time.Now())
+
 	// Close underlying connection
 	return c.conn.Close()
 }
@@ -1109,6 +1335,9 @@ func (c *Conn) cleanup() {
 	}
 	if c.pongTimer != nil {
 		c.pongTimer.Stop()
+	}
+	if c.keepAliveStopCh != nil {
+		close(c.keepAliveStopCh)
 	}
 }
 
@@ -1163,8 +1392,15 @@ func (c *Conn) Emit(event string, data interface{}) {
 		return
 	}
 
+	defer func() {
+		if r := recover(); r != nil {
+			if c.onError != nil {
+				c.onError(c, fmt.Errorf("panic in event handler for '%s': %v", event, r))
+			}
+		}
+	}()
+
 	// Use reflection or type assertion to call handler
-	// This is a simplified version - you might want more sophisticated handling
 	switch h := handler.(type) {
 	case func(*Conn, interface{}):
 		h(c, data)

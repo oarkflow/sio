@@ -785,14 +785,6 @@
                 <!-- Participant videos will be added here -->
             </div>
         </div>
-
-        <!-- Legacy video grid (hidden) -->
-        <div class="video-grid" id="videoGrid">
-            <div class="video-item">
-                <video id="localVideoLegacy" autoplay muted></video>
-                <div class="user-label">You</div>
-            </div>
-        </div>
     </div>
 
     <!-- Recording Indicator -->
@@ -2012,9 +2004,8 @@
             }
         }
 
-        // Add new functions for toast-based call handling
+        // Toast-based call handling (single implementation)
         function acceptCallFromToast(callerId, toastId, callType = 'video') {
-            // Close toast
             closeToast(toastId);
 
             // Get call type from the toast content if possible
@@ -2062,7 +2053,6 @@
         }
 
         function declineCallFromToast(callerId, toastId) {
-            // Close toast
             closeToast(toastId);
 
             // Get call type from the toast content if possible
@@ -2113,9 +2103,6 @@
             addSystemMessage(`${callIcon} ${message.payload.username} started a ${callType} call`);
 
             // Show call invitation
-            showCallInvitation(message.payload.username, message.payload.userId, callType);
-
-            // Show toast notification
             showCallInviteToast(
                 message.payload.username,
                 message.payload.userId,
