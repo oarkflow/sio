@@ -7,8 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -67,6 +70,10 @@ type Server struct {
 
 	// Redis client
 	redisClient *redis.Client
+
+	// Pending file metadata for uploads
+	pendingFileMeta   map[string]*FileSharePayload // clientID -> metadata
+	pendingFileMetaMu sync.Mutex
 }
 
 // Config represents server configuration
@@ -96,7 +103,7 @@ func DefaultConfig() *Config {
 			RateLimitPerSocket: &RateLimit{Requests: 100, WindowSize: time.Minute},
 			RateLimitPerRoom:   &RateLimit{Requests: 1000, WindowSize: time.Minute},
 		},
-		WSConfig: websocket.DefaultConfig(),
+		WSConfig: nil, // Do not set MaxMessageSize/MaxFrameSize here, let main set it
 	}
 }
 
@@ -137,6 +144,7 @@ func NewServer(config *Config) *Server {
 		security:           config.Security,
 		ctx:                ctx,
 		cancel:             cancel,
+		pendingFileMeta:    make(map[string]*FileSharePayload),
 	}
 
 	// Create custom WebSocket server with user info extraction
@@ -331,7 +339,39 @@ func (s *Server) handleNewConnectionWithUser(conn *websocket.Conn, userID, usern
 
 	// Set up connection handlers
 	conn.OnMessage(func(conn *websocket.Conn, messageType websocket.MessageType, data []byte) {
-		s.handleMessage(client, data)
+		if messageType == websocket.TextMessage {
+			// Try to parse as file metadata
+			var msg ChatMessage
+			if err := json.Unmarshal(data, &msg); err == nil && msg.Type == FileShare {
+				// Store metadata for next binary message
+				var meta FileSharePayload
+				if err := s.parsePayload(msg.Payload, &meta); err == nil {
+					// Use currentRoom from client if RoomID is not set
+					if meta.RoomID == "" {
+						for roomID := range client.Rooms {
+							meta.RoomID = roomID
+							break
+						}
+					}
+					s.pendingFileMetaMu.Lock()
+					s.pendingFileMeta[client.ID] = &meta
+					s.pendingFileMetaMu.Unlock()
+				}
+			}
+			// Always call handleMessage for normal text messages
+			s.handleMessage(client, data)
+		} else if messageType == websocket.BinaryMessage {
+			// Retrieve pending metadata
+			s.pendingFileMetaMu.Lock()
+			meta := s.pendingFileMeta[client.ID]
+			delete(s.pendingFileMeta, client.ID)
+			s.pendingFileMetaMu.Unlock()
+			if meta != nil {
+				s.handleBinaryMessage(client, data, meta.FileType, meta.FileName, meta.RoomID)
+			} else {
+				s.sendError(client, 400, "No file metadata for binary upload", "Send metadata before binary data")
+			}
+		}
 	})
 
 	conn.OnClose(func(conn *websocket.Conn, code websocket.CloseCode, reason string) {
@@ -1597,4 +1637,60 @@ func (s *Server) HandleWebSocketUpgrade(w http.ResponseWriter, r *http.Request) 
 	// For now, redirect to the WebSocket server
 	// In a full implementation, you'd handle the upgrade here
 	http.Error(w, "Connect directly to WebSocket server with user info", http.StatusBadRequest)
+}
+
+// Add a helper to save uploaded files
+func (s *Server) saveUploadedFile(data []byte, filename string) (string, error) {
+	uploadDir := "./uploads"
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		return "", err
+	}
+	filePath := filepath.Join(uploadDir, filename)
+	if err := ioutil.WriteFile(filePath, data, 0644); err != nil {
+		return "", err
+	}
+	return filePath, nil
+}
+
+// In handleMessage, add support for binary messages (file/media upload)
+func (s *Server) handleBinaryMessage(client *Client, data []byte, fileType, fileName, roomID string) {
+	// Save file
+	fileID := s.generateMessageID()
+	fileExt := filepath.Ext(fileName)
+	storedName := fileID + fileExt
+	_, err := s.saveUploadedFile(data, storedName)
+	if err != nil {
+		s.sendError(client, 500, "Failed to save file", err.Error())
+		return
+	}
+	fileURL := "/files/" + storedName
+
+	// Broadcast file share message with fileUrl in payload
+	msg := ChatMessage{
+		Type:      FileShare,
+		RoomID:    roomID,
+		Timestamp: time.Now(),
+		Payload: FileSharePayload{
+			MessageID: fileID,
+			UserID:    client.UserID,
+			Username:  client.Username,
+			FileName:  fileName,
+			FileSize:  int64(len(data)),
+			FileType:  fileType,
+			FileURL:   fileURL, // always set
+			RoomID:    roomID,
+		},
+	}
+	s.broadcastToRoom(roomID, msg, "")
+	// Send acknowledgment
+	s.sendMessage(client, ChatMessage{
+		Type:      Acknowledgment,
+		RoomID:    roomID,
+		MessageID: fileID,
+		Timestamp: time.Now(),
+		Payload: AckPayload{
+			MessageID: fileID,
+			Status:    StatusSent,
+		},
+	})
 }

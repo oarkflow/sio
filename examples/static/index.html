@@ -274,6 +274,11 @@
         <div class="typing-indicator" id="typingIndicator"></div>
 
         <div class="input-container">
+            <input type="file" id="fileInput" style="display:none" multiple>
+            <button class="send-btn" id="fileBtn" title="Send File">📎</button>
+            <button class="send-btn" id="audioBtn" title="Record Audio">🎤</button>
+            <button class="send-btn" id="videoBtn" title="Record Video">🎥</button>
+            <button class="send-btn" id="screenBtn" title="Record Screen">🖥️</button>
             <input type="text" id="messageInput" class="message-input" placeholder="Type a message..." disabled>
             <button id="sendBtn" class="send-btn" onclick="sendMessage()" disabled>Send</button>
         </div>
@@ -297,6 +302,11 @@
         const usernameInput = document.getElementById('usernameInput');
         const messageInput = document.getElementById('messageInput');
         const sendBtn = document.getElementById('sendBtn');
+        const fileInput = document.getElementById('fileInput');
+        const fileBtn = document.getElementById('fileBtn');
+        const audioBtn = document.getElementById('audioBtn');
+        const videoBtn = document.getElementById('videoBtn');
+        const screenBtn = document.getElementById('screenBtn');
 
         // Generate a random user ID
         function generateUserId() {
@@ -392,6 +402,8 @@
 
             switch (message.type) {
                 case 'message':
+                case 'file_share':
+                case 'media_share':
                     addChatMessage(message);
                     break;
                 case 'thread_reply':
@@ -490,29 +502,174 @@
             }
         }
 
-        // Add chat message to UI
+        // File upload
+        fileBtn.onclick = () => fileInput.click();
+        fileInput.onchange = () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const files = fileInput.files;
+            for (let file of files) {
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    const arrayBuffer = e.target.result;
+                    // 1. Send metadata first
+                    ws.send(JSON.stringify({
+                        type: 'file_share',
+                        roomId: currentRoom,
+                        payload: {
+                            fileName: file.name,
+                            fileSize: file.size,
+                            fileType: file.type,
+                            userId: currentUser.id,
+                            username: currentUser.username,
+                            messageId: generateMessageId()
+                        }
+                    }));
+                    // 2. Then send the binary data
+                    ws.send(arrayBuffer);
+                };
+                reader.readAsArrayBuffer(file);
+            }
+            fileInput.value = '';
+        };
+
+        // Audio recording
+        let audioRecorder, audioChunks = [];
+        audioBtn.onclick = async () => {
+            if (audioRecorder && audioRecorder.state === 'recording') {
+                audioRecorder.stop();
+                audioBtn.textContent = '🎤';
+                return;
+            }
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+            audioRecorder.ondataavailable = e => audioChunks.push(e.data);
+            audioRecorder.onstop = () => {
+                const blob = new Blob(audioChunks, { type: 'audio/webm' });
+                ws.send(blob);
+                sendWebSocketMessage({
+                    type: 'media_share',
+                    roomId: currentRoom,
+                    payload: {
+                        mediaType: 'audio',
+                        userId: currentUser.id,
+                        username: currentUser.username,
+                        messageId: generateMessageId()
+                    }
+                });
+            };
+            audioRecorder.start();
+            audioBtn.textContent = '⏹️';
+        };
+
+        // Video recording
+        let videoRecorder, videoChunks = [];
+        videoBtn.onclick = async () => {
+            if (videoRecorder && videoRecorder.state === 'recording') {
+                videoRecorder.stop();
+                videoBtn.textContent = '🎥';
+                return;
+            }
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            videoRecorder = new MediaRecorder(stream);
+            videoChunks = [];
+            videoRecorder.ondataavailable = e => videoChunks.push(e.data);
+            videoRecorder.onstop = () => {
+                const blob = new Blob(videoChunks, { type: 'video/webm' });
+                ws.send(blob);
+                sendWebSocketMessage({
+                    type: 'media_share',
+                    roomId: currentRoom,
+                    payload: {
+                        mediaType: 'video',
+                        userId: currentUser.id,
+                        username: currentUser.username,
+                        messageId: generateMessageId()
+                    }
+                });
+            };
+            videoRecorder.start();
+            videoBtn.textContent = '⏹️';
+        };
+
+        // Screen recording
+        let screenRecorder, screenChunks = [];
+        screenBtn.onclick = async () => {
+            if (screenRecorder && screenRecorder.state === 'recording') {
+                screenRecorder.stop();
+                screenBtn.textContent = '🖥️';
+                return;
+            }
+            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+            screenRecorder = new MediaRecorder(stream);
+            screenChunks = [];
+            screenRecorder.ondataavailable = e => screenChunks.push(e.data);
+            screenRecorder.onstop = () => {
+                const blob = new Blob(screenChunks, { type: 'video/webm' });
+                ws.send(blob);
+                sendWebSocketMessage({
+                    type: 'media_share',
+                    roomId: currentRoom,
+                    payload: {
+                        mediaType: 'screen',
+                        userId: currentUser.id,
+                        username: currentUser.username,
+                        messageId: generateMessageId()
+                    }
+                });
+            };
+            screenRecorder.start();
+            screenBtn.textContent = '⏹️';
+        };
+
+        // Display received files/media
         function addChatMessage(message, isReply = false) {
+            // Don't render empty messages or file_share without fileUrl
+            if (
+                (!message.payload || (!message.payload.content && !message.payload.fileUrl)) ||
+                (message.type === 'file_share' && !message.payload.fileUrl)
+            ) {
+                return;
+            }
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${message.payload.userId === currentUser.id ? 'own' : 'other'}`;
-
             const senderDiv = document.createElement('div');
             senderDiv.className = 'sender';
             senderDiv.textContent = message.payload.username;
-
             const contentDiv = document.createElement('div');
             contentDiv.className = 'content';
-            contentDiv.textContent = message.payload.content;
-
+            if (message.type === 'file_share' && message.payload.fileUrl) {
+                const link = document.createElement('a');
+                link.href = message.payload.fileUrl;
+                link.textContent = `Download: ${message.payload.fileName}`;
+                link.target = '_blank';
+                contentDiv.appendChild(link);
+            } else if (message.type === 'media_share' && message.payload.mediaType) {
+                if (message.payload.mediaType === 'audio') {
+                    const audio = document.createElement('audio');
+                    audio.controls = true;
+                    audio.src = message.payload.fileUrl || '';
+                    contentDiv.appendChild(audio);
+                } else if (message.payload.mediaType === 'video' || message.payload.mediaType === 'screen') {
+                    const video = document.createElement('video');
+                    video.controls = true;
+                    video.width = 320;
+                    video.src = message.payload.fileUrl || '';
+                    contentDiv.appendChild(video);
+                } else {
+                    contentDiv.textContent = '[Media received]';
+                }
+            } else {
+                contentDiv.textContent = message.payload.content;
+            }
             const timeDiv = document.createElement('div');
             timeDiv.className = 'time';
             timeDiv.textContent = new Date(message.timestamp).toLocaleTimeString();
-
             if (message.payload.userId !== currentUser.id) {
                 messageDiv.appendChild(senderDiv);
             }
             messageDiv.appendChild(contentDiv);
             messageDiv.appendChild(timeDiv);
-
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }

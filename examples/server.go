@@ -21,7 +21,7 @@ func main() {
 		dbURL       = flag.String("db", "", "Database URL (empty for in-memory)")
 		tlsCert     = flag.String("tls-cert", "", "TLS certificate file")
 		tlsKey      = flag.String("tls-key", "", "TLS key file")
-		maxMsgLen   = flag.Int("max-msg-len", 4096, "Maximum message length")
+		maxMsgLen   = flag.Int("max-msg-len", 4096000, "Maximum message length")
 		rateLimit   = flag.Int("rate-limit", 100, "Rate limit per minute per client")
 		corsOrigins = flag.String("cors-origins", "*", "Allowed CORS origins (comma-separated)")
 	)
@@ -40,6 +40,7 @@ func main() {
 	// Create WebSocket configuration
 	wsConfig := websocket.DefaultConfig()
 	wsConfig.MaxMessageSize = int64(*maxMsgLen)
+	wsConfig.MaxFrameSize = int64(*maxMsgLen) // Ensure frame size matches message size
 	wsConfig.CheckOrigin = func(r *http.Request) bool {
 		if *corsOrigins == "*" {
 			return true

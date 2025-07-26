@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -346,6 +349,21 @@ func (h *HTTPHandler) FileUploadHandler(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(response)
 }
 
+// Add file server handler for /files/{filename}
+func (h *HTTPHandler) fileServerHandler(w http.ResponseWriter, r *http.Request) {
+	filename := filepath.Base(r.URL.Path)
+	filePath := filepath.Join("./uploads", filename)
+	file, err := os.Open(filePath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	io.Copy(w, file)
+}
+
 // SetupRoutes sets up HTTP routes for the chat API
 func (h *HTTPHandler) SetupRoutes(mux *http.ServeMux) {
 	// WebSocket endpoint
@@ -375,6 +393,9 @@ func (h *HTTPHandler) SetupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/enhanced", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "./static/enhanced-chat.html")
 	})
+
+	// File server for uploaded files
+	mux.HandleFunc("/files/", h.fileServerHandler)
 }
 
 // CORS middleware

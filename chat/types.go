@@ -124,13 +124,15 @@ type ErrorPayload struct {
 
 // FileSharePayload for file sharing
 type FileSharePayload struct {
-	FileName  string `json:"fileName"`
-	FileSize  int64  `json:"fileSize"`
-	FileType  string `json:"fileType"`
-	FileData  string `json:"fileData"` // Base64 encoded
-	UserID    string `json:"userId"`
-	Username  string `json:"username"`
-	MessageID string `json:"messageId"`
+	MessageID string      `json:"messageId"`
+	UserID    string      `json:"userId"`
+	Username  string      `json:"username"`
+	FileName  string      `json:"fileName"`
+	FileSize  int64       `json:"fileSize"`
+	FileType  string      `json:"fileType"`
+	FileData  interface{} `json:"fileData,omitempty"`
+	FileURL   string      `json:"fileUrl,omitempty"`
+	RoomID    string      `json:"roomId,omitempty"` // Add RoomID for upload context
 }
 
 // MediaSharePayload for media sharing (audio/video recordings)
@@ -232,7 +234,7 @@ type DBMessage struct {
 	Timestamp       time.Time `json:"timestamp" db:"timestamp"`
 	ParentMessageID *string   `json:"parentMessageId,omitempty" db:"parent_message_id"`
 	MessageType     string    `json:"messageType" db:"message_type"`
-	FileData        *string   `json:"fileData,omitempty" db:"file_data"`
+	FileData        any       `json:"fileData,omitempty" db:"file_data"`
 	FileName        *string   `json:"fileName,omitempty" db:"file_name"`
 	FileSize        *int64    `json:"fileSize,omitempty" db:"file_size"`
 	FileType        *string   `json:"fileType,omitempty" db:"file_type"`
