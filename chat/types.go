@@ -22,6 +22,15 @@ const (
 	TypingStop     MessageType = "typing_stop"
 	Acknowledgment MessageType = "ack"
 	Error          MessageType = "error"
+	FileShare      MessageType = "file_share"
+	MediaShare     MessageType = "media_share"
+	CallInvite     MessageType = "call_invite"
+	CallAnswer     MessageType = "call_answer"
+	CallEnd        MessageType = "call_end"
+	WebRTCSignal   MessageType = "webrtc_signal"
+	ScreenShare    MessageType = "screen_share"
+	RecordingStart MessageType = "recording_start"
+	RecordingStop  MessageType = "recording_stop"
 )
 
 // RoomType represents different types of chat rooms
@@ -113,6 +122,86 @@ type ErrorPayload struct {
 	Details string `json:"details,omitempty"`
 }
 
+// FileSharePayload for file sharing
+type FileSharePayload struct {
+	FileName  string `json:"fileName"`
+	FileSize  int64  `json:"fileSize"`
+	FileType  string `json:"fileType"`
+	FileData  string `json:"fileData"` // Base64 encoded
+	UserID    string `json:"userId"`
+	Username  string `json:"username"`
+	MessageID string `json:"messageId"`
+}
+
+// MediaSharePayload for media sharing (audio/video recordings)
+type MediaSharePayload struct {
+	MediaType string `json:"mediaType"`           // audio, video, screen
+	MediaData string `json:"mediaData"`           // Base64 encoded
+	Duration  int    `json:"duration"`            // Duration in seconds
+	Thumbnail string `json:"thumbnail,omitempty"` // Base64 encoded thumbnail for videos
+	UserID    string `json:"userId"`
+	Username  string `json:"username"`
+	MessageID string `json:"messageId"`
+}
+
+// CallInvitePayload for video call invitations
+type CallInvitePayload struct {
+	UserID   string `json:"userId"`
+	Username string `json:"username"`
+	CallType string `json:"callType"` // audio, video, screen
+	RoomID   string `json:"roomId"`
+}
+
+// CallAnswerPayload for call responses
+type CallAnswerPayload struct {
+	UserID   string `json:"userId"`
+	Username string `json:"username"`
+	CallID   string `json:"callId"`
+	Accepted bool   `json:"accepted"`
+}
+
+// CallEndPayload for ending calls
+type CallEndPayload struct {
+	UserID   string `json:"userId"`
+	Username string `json:"username"`
+	CallID   string `json:"callId"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// WebRTCSignalPayload for WebRTC signaling
+type WebRTCSignalPayload struct {
+	UserID     string      `json:"userId"`
+	Username   string      `json:"username"`
+	Signal     interface{} `json:"signal"`     // SDP offer/answer or ICE candidate
+	SignalType string      `json:"signalType"` // offer, answer, ice-candidate
+}
+
+// ScreenSharePayload for screen sharing
+type ScreenSharePayload struct {
+	UserID    string `json:"userId"`
+	Username  string `json:"username"`
+	IsSharing bool   `json:"isSharing"`
+	StreamID  string `json:"streamId,omitempty"`
+}
+
+// RecordingPayload for call recording
+type RecordingPayload struct {
+	UserID      string `json:"userId"`
+	Username    string `json:"username"`
+	IsRecording bool   `json:"isRecording"`
+	RecordingID string `json:"recordingId,omitempty"`
+}
+
+// LocationPayload for location sharing
+type LocationPayload struct {
+	UserID    string  `json:"userId"`
+	Username  string  `json:"username"`
+	MessageID string  `json:"messageId"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Address   string  `json:"address,omitempty"`
+}
+
 // Client represents a connected chat client
 type Client struct {
 	ID       string
@@ -143,6 +232,15 @@ type DBMessage struct {
 	Timestamp       time.Time `json:"timestamp" db:"timestamp"`
 	ParentMessageID *string   `json:"parentMessageId,omitempty" db:"parent_message_id"`
 	MessageType     string    `json:"messageType" db:"message_type"`
+	FileData        *string   `json:"fileData,omitempty" db:"file_data"`
+	FileName        *string   `json:"fileName,omitempty" db:"file_name"`
+	FileSize        *int64    `json:"fileSize,omitempty" db:"file_size"`
+	FileType        *string   `json:"fileType,omitempty" db:"file_type"`
+	MediaData       *string   `json:"mediaData,omitempty" db:"media_data"`
+	MediaType       *string   `json:"mediaType,omitempty" db:"media_type"`
+	Duration        *int      `json:"duration,omitempty" db:"duration"`
+	Latitude        *float64  `json:"latitude,omitempty" db:"latitude"`
+	Longitude       *float64  `json:"longitude,omitempty" db:"longitude"`
 }
 
 // DBRoom represents a room in the database

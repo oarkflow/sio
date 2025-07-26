@@ -308,6 +308,24 @@ func (s *Server) handleMessage(client *Client, data []byte) {
 		s.handleTyping(client, &msg)
 	case ReadReceipt:
 		s.handleReadReceipt(client, &msg)
+	case FileShare:
+		s.handleFileShare(client, &msg)
+	case MediaShare:
+		s.handleMediaShare(client, &msg)
+	case CallInvite:
+		s.handleCallInvite(client, &msg)
+	case CallAnswer:
+		s.handleCallAnswer(client, &msg)
+	case CallEnd:
+		s.handleCallEnd(client, &msg)
+	case WebRTCSignal:
+		s.handleWebRTCSignal(client, &msg)
+	case ScreenShare:
+		s.handleScreenShare(client, &msg)
+	case RecordingStart:
+		s.handleRecordingStart(client, &msg)
+	case RecordingStop:
+		s.handleRecordingStop(client, &msg)
 	default:
 		s.sendError(client, 400, "Unknown message type", string(msg.Type))
 	}
@@ -631,6 +649,336 @@ func (s *Server) handleReadReceipt(client *Client, msg *ChatMessage) {
 	msg.Payload = payload
 
 	// Broadcast read receipt (exclude sender)
+	s.broadcastToRoom(roomID, *msg, client.ID)
+}
+
+// handleFileShare processes file sharing messages
+func (s *Server) handleFileShare(client *Client, msg *ChatMessage) {
+	roomID := msg.RoomID
+
+	// Check if client is in room
+	if !client.Rooms[roomID] {
+		s.sendError(client, 403, "Access denied", "You are not in this room")
+		return
+	}
+
+	// Parse payload
+	var payload FileSharePayload
+	if err := s.parsePayload(msg.Payload, &payload); err != nil {
+		s.sendError(client, 400, "Invalid payload", err.Error())
+		return
+	}
+
+	// Generate message ID if not provided
+	if payload.MessageID == "" {
+		payload.MessageID = s.generateMessageID()
+	}
+
+	// Set sender info
+	payload.UserID = client.UserID
+	payload.Username = client.Username
+
+	// Validate file size (limit to 10MB for now)
+	if payload.FileSize > 10*1024*1024 {
+		s.sendError(client, 413, "File too large", "File size exceeds 10MB limit")
+		return
+	}
+
+	// Save to database
+	dbMessage := &DBMessage{
+		ID:          payload.MessageID,
+		RoomID:      roomID,
+		SenderID:    client.UserID,
+		Content:     fmt.Sprintf("Shared file: %s", payload.FileName),
+		Timestamp:   msg.Timestamp,
+		MessageType: string(FileShare),
+		FileData:    &payload.FileData,
+		FileName:    &payload.FileName,
+		FileSize:    &payload.FileSize,
+		FileType:    &payload.FileType,
+	}
+
+	if err := s.db.SaveMessage(s.ctx, dbMessage); err != nil {
+		s.sendError(client, 500, "Failed to save file", err.Error())
+		return
+	}
+
+	// Update message with payload
+	msg.Payload = payload
+
+	// Broadcast to room
+	s.broadcastToRoom(roomID, *msg, "")
+
+	// Send acknowledgment to sender
+	s.sendMessage(client, ChatMessage{
+		Type:      Acknowledgment,
+		MessageID: payload.MessageID,
+		Payload: AckPayload{
+			MessageID: payload.MessageID,
+			Status:    StatusSent,
+		},
+		Timestamp: time.Now(),
+	})
+}
+
+// handleMediaShare processes media sharing (audio/video recordings)
+func (s *Server) handleMediaShare(client *Client, msg *ChatMessage) {
+	roomID := msg.RoomID
+
+	// Check if client is in room
+	if !client.Rooms[roomID] {
+		s.sendError(client, 403, "Access denied", "You are not in this room")
+		return
+	}
+
+	// Parse payload
+	var payload MediaSharePayload
+	if err := s.parsePayload(msg.Payload, &payload); err != nil {
+		s.sendError(client, 400, "Invalid payload", err.Error())
+		return
+	}
+
+	// Generate message ID if not provided
+	if payload.MessageID == "" {
+		payload.MessageID = s.generateMessageID()
+	}
+
+	// Set sender info
+	payload.UserID = client.UserID
+	payload.Username = client.Username
+
+	// Save to database
+	dbMessage := &DBMessage{
+		ID:          payload.MessageID,
+		RoomID:      roomID,
+		SenderID:    client.UserID,
+		Content:     fmt.Sprintf("Shared %s recording (%ds)", payload.MediaType, payload.Duration),
+		Timestamp:   msg.Timestamp,
+		MessageType: string(MediaShare),
+		MediaData:   &payload.MediaData,
+		MediaType:   &payload.MediaType,
+		Duration:    &payload.Duration,
+	}
+
+	if err := s.db.SaveMessage(s.ctx, dbMessage); err != nil {
+		s.sendError(client, 500, "Failed to save media", err.Error())
+		return
+	}
+
+	// Update message with payload
+	msg.Payload = payload
+
+	// Broadcast to room
+	s.broadcastToRoom(roomID, *msg, "")
+
+	// Send acknowledgment to sender
+	s.sendMessage(client, ChatMessage{
+		Type:      Acknowledgment,
+		MessageID: payload.MessageID,
+		Payload: AckPayload{
+			MessageID: payload.MessageID,
+			Status:    StatusSent,
+		},
+		Timestamp: time.Now(),
+	})
+}
+
+// handleCallInvite processes video call invitations
+func (s *Server) handleCallInvite(client *Client, msg *ChatMessage) {
+	roomID := msg.RoomID
+
+	// Check if client is in room
+	if !client.Rooms[roomID] {
+		s.sendError(client, 403, "Access denied", "You are not in this room")
+		return
+	}
+
+	// Parse payload
+	var payload CallInvitePayload
+	if err := s.parsePayload(msg.Payload, &payload); err != nil {
+		s.sendError(client, 400, "Invalid payload", err.Error())
+		return
+	}
+
+	// Set sender info
+	payload.UserID = client.UserID
+	payload.Username = client.Username
+	payload.RoomID = roomID
+
+	// Update message with payload
+	msg.Payload = payload
+
+	// Broadcast to room (exclude sender)
+	s.broadcastToRoom(roomID, *msg, client.ID)
+}
+
+// handleCallAnswer processes call responses
+func (s *Server) handleCallAnswer(client *Client, msg *ChatMessage) {
+	roomID := msg.RoomID
+
+	// Check if client is in room
+	if !client.Rooms[roomID] {
+		s.sendError(client, 403, "Access denied", "You are not in this room")
+		return
+	}
+
+	// Parse payload
+	var payload CallAnswerPayload
+	if err := s.parsePayload(msg.Payload, &payload); err != nil {
+		s.sendError(client, 400, "Invalid payload", err.Error())
+		return
+	}
+
+	// Set sender info
+	payload.UserID = client.UserID
+	payload.Username = client.Username
+
+	// Update message with payload
+	msg.Payload = payload
+
+	// Broadcast to room (exclude sender)
+	s.broadcastToRoom(roomID, *msg, client.ID)
+}
+
+// handleCallEnd processes call end notifications
+func (s *Server) handleCallEnd(client *Client, msg *ChatMessage) {
+	roomID := msg.RoomID
+
+	// Check if client is in room
+	if !client.Rooms[roomID] {
+		s.sendError(client, 403, "Access denied", "You are not in this room")
+		return
+	}
+
+	// Parse payload
+	var payload CallEndPayload
+	if err := s.parsePayload(msg.Payload, &payload); err != nil {
+		s.sendError(client, 400, "Invalid payload", err.Error())
+		return
+	}
+
+	// Set sender info
+	payload.UserID = client.UserID
+	payload.Username = client.Username
+
+	// Update message with payload
+	msg.Payload = payload
+
+	// Broadcast to room (exclude sender)
+	s.broadcastToRoom(roomID, *msg, client.ID)
+}
+
+// handleWebRTCSignal processes WebRTC signaling messages
+func (s *Server) handleWebRTCSignal(client *Client, msg *ChatMessage) {
+	roomID := msg.RoomID
+
+	// Check if client is in room
+	if !client.Rooms[roomID] {
+		s.sendError(client, 403, "Access denied", "You are not in this room")
+		return
+	}
+
+	// Parse payload
+	var payload WebRTCSignalPayload
+	if err := s.parsePayload(msg.Payload, &payload); err != nil {
+		s.sendError(client, 400, "Invalid payload", err.Error())
+		return
+	}
+
+	// Set sender info
+	payload.UserID = client.UserID
+	payload.Username = client.Username
+
+	// Update message with payload
+	msg.Payload = payload
+
+	// Broadcast to room (exclude sender)
+	s.broadcastToRoom(roomID, *msg, client.ID)
+}
+
+// handleScreenShare processes screen sharing notifications
+func (s *Server) handleScreenShare(client *Client, msg *ChatMessage) {
+	roomID := msg.RoomID
+
+	// Check if client is in room
+	if !client.Rooms[roomID] {
+		s.sendError(client, 403, "Access denied", "You are not in this room")
+		return
+	}
+
+	// Parse payload
+	var payload ScreenSharePayload
+	if err := s.parsePayload(msg.Payload, &payload); err != nil {
+		s.sendError(client, 400, "Invalid payload", err.Error())
+		return
+	}
+
+	// Set sender info
+	payload.UserID = client.UserID
+	payload.Username = client.Username
+
+	// Update message with payload
+	msg.Payload = payload
+
+	// Broadcast to room (exclude sender)
+	s.broadcastToRoom(roomID, *msg, client.ID)
+}
+
+// handleRecordingStart processes recording start notifications
+func (s *Server) handleRecordingStart(client *Client, msg *ChatMessage) {
+	roomID := msg.RoomID
+
+	// Check if client is in room
+	if !client.Rooms[roomID] {
+		s.sendError(client, 403, "Access denied", "You are not in this room")
+		return
+	}
+
+	// Parse payload
+	var payload RecordingPayload
+	if err := s.parsePayload(msg.Payload, &payload); err != nil {
+		s.sendError(client, 400, "Invalid payload", err.Error())
+		return
+	}
+
+	// Set sender info
+	payload.UserID = client.UserID
+	payload.Username = client.Username
+	payload.IsRecording = true
+
+	// Update message with payload
+	msg.Payload = payload
+
+	// Broadcast to room (exclude sender)
+	s.broadcastToRoom(roomID, *msg, client.ID)
+}
+
+// handleRecordingStop processes recording stop notifications
+func (s *Server) handleRecordingStop(client *Client, msg *ChatMessage) {
+	roomID := msg.RoomID
+
+	// Check if client is in room
+	if !client.Rooms[roomID] {
+		s.sendError(client, 403, "Access denied", "You are not in this room")
+		return
+	}
+
+	// Parse payload
+	var payload RecordingPayload
+	if err := s.parsePayload(msg.Payload, &payload); err != nil {
+		s.sendError(client, 400, "Invalid payload", err.Error())
+		return
+	}
+
+	// Set sender info
+	payload.UserID = client.UserID
+	payload.Username = client.Username
+	payload.IsRecording = false
+
+	// Update message with payload
+	msg.Payload = payload
+
+	// Broadcast to room (exclude sender)
 	s.broadcastToRoom(roomID, *msg, client.ID)
 }
 

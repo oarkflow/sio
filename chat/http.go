@@ -185,6 +185,73 @@ func (h *HTTPHandler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(response)
 }
 
+// FileUploadHandler handles file uploads via HTTP
+func (h *HTTPHandler) FileUploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse multipart form data (limit to 50MB)
+	if err := r.ParseMultipartForm(50 << 20); err != nil {
+		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
+		return
+	}
+
+	// Get user info from headers
+	userID := r.Header.Get("X-User-ID")
+	username := r.Header.Get("X-Username")
+	roomID := r.FormValue("roomId")
+
+	if userID == "" || username == "" || roomID == "" {
+		http.Error(w, "Missing required parameters", http.StatusBadRequest)
+		return
+	}
+
+	// Get uploaded files
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		http.Error(w, "No files uploaded", http.StatusBadRequest)
+		return
+	}
+
+	var uploadedFiles []map[string]interface{}
+
+	for _, fileHeader := range files {
+		file, err := fileHeader.Open()
+		if err != nil {
+			continue
+		}
+		defer file.Close()
+
+		// Read file data
+		fileData := make([]byte, fileHeader.Size)
+		_, err = file.Read(fileData)
+		if err != nil {
+			continue
+		}
+
+		// Create file info
+		fileInfo := map[string]interface{}{
+			"fileName": fileHeader.Filename,
+			"fileSize": fileHeader.Size,
+			"fileType": fileHeader.Header.Get("Content-Type"),
+			"fileData": fileData, // Would normally save to storage and return URL
+		}
+
+		uploadedFiles = append(uploadedFiles, fileInfo)
+	}
+
+	response := map[string]interface{}{
+		"status": "success",
+		"files":  uploadedFiles,
+		"count":  len(uploadedFiles),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 // SetupRoutes sets up HTTP routes for the chat API
 func (h *HTTPHandler) SetupRoutes(mux *http.ServeMux) {
 	// WebSocket endpoint
@@ -193,6 +260,9 @@ func (h *HTTPHandler) SetupRoutes(mux *http.ServeMux) {
 	// REST API endpoints
 	mux.HandleFunc("/api/rooms", h.GetRoomsHandler)
 	mux.HandleFunc("/api/rooms/create", h.CreateRoomHandler)
+
+	// File upload endpoint
+	mux.HandleFunc("/api/upload", h.FileUploadHandler)
 
 	// Messages endpoints (using pattern matching for room ID)
 	mux.HandleFunc("/api/rooms/", func(w http.ResponseWriter, r *http.Request) {
@@ -203,6 +273,11 @@ func (h *HTTPHandler) SetupRoutes(mux *http.ServeMux) {
 		} else {
 			http.NotFound(w, r)
 		}
+	})
+
+	// Serve enhanced chat client
+	mux.HandleFunc("/enhanced", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./static/enhanced-chat.html")
 	})
 }
 

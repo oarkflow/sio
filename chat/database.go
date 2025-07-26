@@ -78,7 +78,16 @@ func (p *PostgreSQLDB) initSchema() error {
 			content TEXT NOT NULL,
 			timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 			parent_message_id VARCHAR(255) REFERENCES messages(id) ON DELETE CASCADE,
-			message_type VARCHAR(50) DEFAULT 'message'
+			message_type VARCHAR(50) DEFAULT 'message',
+			file_data TEXT,
+			file_name VARCHAR(500),
+			file_size BIGINT,
+			file_type VARCHAR(100),
+			media_data TEXT,
+			media_type VARCHAR(50),
+			duration INTEGER,
+			latitude DECIMAL(10, 8),
+			longitude DECIMAL(11, 8)
 		)`,
 		`CREATE TABLE IF NOT EXISTS room_members (
 			room_id VARCHAR(255) NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -112,19 +121,23 @@ func (p *PostgreSQLDB) initSchema() error {
 // SaveMessage saves a message to the database
 func (p *PostgreSQLDB) SaveMessage(ctx context.Context, message *DBMessage) error {
 	query := `
-		INSERT INTO messages (id, room_id, sender_id, content, timestamp, parent_message_id, message_type)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO messages (id, room_id, sender_id, content, timestamp, parent_message_id, message_type,
+		                     file_data, file_name, file_size, file_type, media_data, media_type, duration, latitude, longitude)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 	_, err := p.db.ExecContext(ctx, query,
 		message.ID, message.RoomID, message.SenderID, message.Content,
-		message.Timestamp, message.ParentMessageID, message.MessageType)
+		message.Timestamp, message.ParentMessageID, message.MessageType,
+		message.FileData, message.FileName, message.FileSize, message.FileType,
+		message.MediaData, message.MediaType, message.Duration, message.Latitude, message.Longitude)
 	return err
 }
 
 // GetMessages retrieves messages from a room with pagination
 func (p *PostgreSQLDB) GetMessages(ctx context.Context, roomID string, limit, offset int) ([]*DBMessage, error) {
 	query := `
-		SELECT id, room_id, sender_id, content, timestamp, parent_message_id, message_type
+		SELECT id, room_id, sender_id, content, timestamp, parent_message_id, message_type,
+		       file_data, file_name, file_size, file_type, media_data, media_type, duration, latitude, longitude
 		FROM messages
 		WHERE room_id = $1
 		ORDER BY timestamp DESC
@@ -140,7 +153,9 @@ func (p *PostgreSQLDB) GetMessages(ctx context.Context, roomID string, limit, of
 	for rows.Next() {
 		message := &DBMessage{}
 		err := rows.Scan(&message.ID, &message.RoomID, &message.SenderID,
-			&message.Content, &message.Timestamp, &message.ParentMessageID, &message.MessageType)
+			&message.Content, &message.Timestamp, &message.ParentMessageID, &message.MessageType,
+			&message.FileData, &message.FileName, &message.FileSize, &message.FileType,
+			&message.MediaData, &message.MediaType, &message.Duration, &message.Latitude, &message.Longitude)
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +168,8 @@ func (p *PostgreSQLDB) GetMessages(ctx context.Context, roomID string, limit, of
 // GetThreadMessages retrieves all replies to a parent message
 func (p *PostgreSQLDB) GetThreadMessages(ctx context.Context, parentMessageID string) ([]*DBMessage, error) {
 	query := `
-		SELECT id, room_id, sender_id, content, timestamp, parent_message_id, message_type
+		SELECT id, room_id, sender_id, content, timestamp, parent_message_id, message_type,
+		       file_data, file_name, file_size, file_type, media_data, media_type, duration, latitude, longitude
 		FROM messages
 		WHERE parent_message_id = $1
 		ORDER BY timestamp ASC
@@ -168,7 +184,9 @@ func (p *PostgreSQLDB) GetThreadMessages(ctx context.Context, parentMessageID st
 	for rows.Next() {
 		message := &DBMessage{}
 		err := rows.Scan(&message.ID, &message.RoomID, &message.SenderID,
-			&message.Content, &message.Timestamp, &message.ParentMessageID, &message.MessageType)
+			&message.Content, &message.Timestamp, &message.ParentMessageID, &message.MessageType,
+			&message.FileData, &message.FileName, &message.FileSize, &message.FileType,
+			&message.MediaData, &message.MediaType, &message.Duration, &message.Latitude, &message.Longitude)
 		if err != nil {
 			return nil, err
 		}
@@ -181,14 +199,17 @@ func (p *PostgreSQLDB) GetThreadMessages(ctx context.Context, parentMessageID st
 // GetMessage retrieves a specific message
 func (p *PostgreSQLDB) GetMessage(ctx context.Context, messageID string) (*DBMessage, error) {
 	query := `
-		SELECT id, room_id, sender_id, content, timestamp, parent_message_id, message_type
+		SELECT id, room_id, sender_id, content, timestamp, parent_message_id, message_type,
+		       file_data, file_name, file_size, file_type, media_data, media_type, duration, latitude, longitude
 		FROM messages
 		WHERE id = $1
 	`
 	message := &DBMessage{}
 	err := p.db.QueryRowContext(ctx, query, messageID).Scan(
 		&message.ID, &message.RoomID, &message.SenderID,
-		&message.Content, &message.Timestamp, &message.ParentMessageID, &message.MessageType)
+		&message.Content, &message.Timestamp, &message.ParentMessageID, &message.MessageType,
+		&message.FileData, &message.FileName, &message.FileSize, &message.FileType,
+		&message.MediaData, &message.MediaType, &message.Duration, &message.Latitude, &message.Longitude)
 
 	if err != nil {
 		return nil, err
