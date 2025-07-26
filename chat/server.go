@@ -361,11 +361,18 @@ func (s *Server) handleNewConnectionWithUser(conn *websocket.Conn, userID, usern
 			// Always call handleMessage for normal text messages
 			s.handleMessage(client, data)
 		} else if messageType == websocket.BinaryMessage {
-			// Retrieve pending metadata
-			s.pendingFileMetaMu.Lock()
-			meta := s.pendingFileMeta[client.ID]
-			delete(s.pendingFileMeta, client.ID)
-			s.pendingFileMetaMu.Unlock()
+			var meta *FileSharePayload
+			for i := 0; i < 10; i++ {
+				s.pendingFileMetaMu.Lock()
+				meta = s.pendingFileMeta[client.ID]
+				if meta != nil {
+					delete(s.pendingFileMeta, client.ID)
+					s.pendingFileMetaMu.Unlock()
+					break
+				}
+				s.pendingFileMetaMu.Unlock()
+				time.Sleep(10 * time.Millisecond)
+			}
 			if meta != nil {
 				s.handleBinaryMessage(client, data, meta.FileType, meta.FileName, meta.RoomID)
 			} else {
@@ -501,6 +508,17 @@ func (s *Server) handleJoinRoom(client *Client, msg *ChatMessage) {
 			JoinedAt: time.Now(),
 		}
 		s.db.AddRoomMember(s.ctx, member)
+	}
+
+	// Send message history to the client
+	if messages, err := s.db.GetMessages(s.ctx, roomID, 50, 0); err == nil && len(messages) > 0 {
+		historyMsg := ChatMessage{
+			Type:      "history",
+			RoomID:    roomID,
+			Timestamp: time.Now(),
+			Payload:   messages,
+		}
+		s.sendMessage(client, historyMsg)
 	}
 
 	// Broadcast user joined
@@ -1652,9 +1670,8 @@ func (s *Server) saveUploadedFile(data []byte, filename string) (string, error) 
 	return filePath, nil
 }
 
-// In handleMessage, add support for binary messages (file/media upload)
+// In handleBinaryMessage, always set fileUrl in DB
 func (s *Server) handleBinaryMessage(client *Client, data []byte, fileType, fileName, roomID string) {
-	// Save file
 	fileID := s.generateMessageID()
 	fileExt := filepath.Ext(fileName)
 	storedName := fileID + fileExt
@@ -1665,7 +1682,21 @@ func (s *Server) handleBinaryMessage(client *Client, data []byte, fileType, file
 	}
 	fileURL := "/files/" + storedName
 
-	// Broadcast file share message with fileUrl in payload
+	// Save to database with fileUrl
+	dbMessage := &DBMessage{
+		ID:          fileID,
+		RoomID:      roomID,
+		SenderID:    client.UserID,
+		Content:     "[File uploaded]",
+		Timestamp:   time.Now(),
+		MessageType: string(FileShare),
+		FileName:    &fileName,
+		FileSize:    func() *int64 { s := int64(len(data)); return &s }(),
+		FileType:    &fileType,
+		FileURL:     &fileURL,
+	}
+	s.db.SaveMessage(s.ctx, dbMessage)
+
 	msg := ChatMessage{
 		Type:      FileShare,
 		RoomID:    roomID,
@@ -1677,12 +1708,11 @@ func (s *Server) handleBinaryMessage(client *Client, data []byte, fileType, file
 			FileName:  fileName,
 			FileSize:  int64(len(data)),
 			FileType:  fileType,
-			FileURL:   fileURL, // always set
+			FileURL:   fileURL,
 			RoomID:    roomID,
 		},
 	}
 	s.broadcastToRoom(roomID, msg, "")
-	// Send acknowledgment
 	s.sendMessage(client, ChatMessage{
 		Type:      Acknowledgment,
 		RoomID:    roomID,

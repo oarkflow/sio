@@ -308,6 +308,9 @@
         const videoBtn = document.getElementById('videoBtn');
         const screenBtn = document.getElementById('screenBtn');
 
+        // Global array to store all messages for the current room
+        let allMessages = [];
+
         // Generate a random user ID
         function generateUserId() {
             return 'user_' + Math.random().toString(36).substr(2, 9);
@@ -396,39 +399,73 @@
             updateConnectionStatus('Connection error', 'disconnected');
         }
 
+        // Helper to render all messages in order
+        function renderAllMessages() {
+            // Sort by timestamp ascending
+            allMessages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            messagesContainer.innerHTML = '';
+            allMessages.forEach(msg => {
+                if (msg.type === 'system') {
+                    addSystemMessage(msg.payload || msg.content || '', msg.systemType || 'info');
+                } else {
+                    addChatMessage(msg);
+                }
+            });
+        }
+
         // Handle incoming messages
         function handleMessage(message) {
             console.log('Received message:', message);
 
-            switch (message.type) {
-                case 'message':
-                case 'file_share':
-                case 'media_share':
-                    addChatMessage(message);
-                    break;
-                case 'thread_reply':
-                    addChatMessage(message, true);
-                    break;
-                case 'user_joined':
-                    addSystemMessage(`${message.payload.username} joined the room`);
-                    break;
-                case 'user_left':
-                    addSystemMessage(`${message.payload.username} left the room`);
-                    break;
-                case 'typing_start':
-                    showTypingIndicator(message.payload.username);
-                    break;
-                case 'typing_stop':
-                    hideTypingIndicator(message.payload.username);
-                    break;
-                case 'ack':
-                    console.log('Message acknowledged:', message.payload);
-                    break;
-                case 'error':
-                    addSystemMessage(`Error: ${message.payload.message}`, 'error');
-                    break;
-                default:
-                    console.log('Unknown message type:', message.type);
+            if (message.type === 'history' && Array.isArray(message.payload)) {
+                // Convert and add all history messages to allMessages
+                allMessages = message.payload.map(msg => {
+                    let chatMsg = msg;
+                    if (!chatMsg.type && msg.messageType) chatMsg.type = msg.messageType;
+                    if (!chatMsg.payload) {
+                        chatMsg.payload = {};
+                        if (msg.content) chatMsg.payload.content = msg.content;
+                        if (msg.senderId) chatMsg.payload.userId = msg.senderId;
+                        if (msg.fileUrl) chatMsg.payload.fileUrl = msg.fileUrl;
+                        if (msg.fileName) chatMsg.payload.fileName = msg.fileName;
+                        if (msg.username) chatMsg.payload.username = msg.username;
+                    }
+                    chatMsg.timestamp = msg.timestamp;
+                    return chatMsg;
+                });
+                renderAllMessages();
+                return;
+            }
+
+            // For live messages, add to allMessages and re-render
+            if ([
+                'message', 'file_share', 'media_share', 'thread_reply',
+                'user_joined', 'user_left', 'typing_start', 'typing_stop', 'ack', 'error'
+            ].includes(message.type)) {
+                // System messages
+                if (['user_joined', 'user_left', 'error'].includes(message.type)) {
+                    allMessages.push({
+                        type: 'system',
+                        timestamp: message.timestamp,
+                        payload: message.type === 'error' ? `Error: ${message.payload.message}` : `${message.payload.username} ${message.type === 'user_joined' ? 'joined' : 'left'} the room`,
+                        systemType: message.type === 'error' ? 'error' : 'info'
+                    });
+                } else {
+                    allMessages.push(message);
+                }
+                renderAllMessages();
+                return;
+            }
+
+            // Typing indicators and acks are not added to message list
+            if (message.type === 'typing_start') {
+                showTypingIndicator(message.payload.username);
+            } else if (message.type === 'typing_stop') {
+                hideTypingIndicator(message.payload.username);
+            } else if (message.type === 'ack') {
+                console.log('Message acknowledged:', message.payload);
+            } else {
+                console.log('Unknown message type:', message.type);
             }
         }
 
@@ -461,16 +498,15 @@
             }
 
             currentRoom = roomId;
+            allMessages = [];
+            messagesContainer.innerHTML = '';
+            addSystemMessage(`Joined room: ${roomId}`);
 
-            // Join new room
+            // Join new room via WebSocket
             sendWebSocketMessage({
                 type: 'join_room',
                 roomId: roomId
             });
-
-            // Clear messages
-            messagesContainer.innerHTML = '';
-            addSystemMessage(`Joined room: ${roomId}`);
         }
 
         // Send a chat message

@@ -237,6 +237,7 @@ type DBMessage struct {
 	FileData        any       `json:"fileData,omitempty" db:"file_data"`
 	FileName        *string   `json:"fileName,omitempty" db:"file_name"`
 	FileSize        *int64    `json:"fileSize,omitempty" db:"file_size"`
+	FileURL         *string   `json:"fileUrl,omitempty" db:"file_url"` // URL for file download
 	FileType        *string   `json:"fileType,omitempty" db:"file_type"`
 	MediaData       *string   `json:"mediaData,omitempty" db:"media_data"`
 	MediaType       *string   `json:"mediaType,omitempty" db:"media_type"`
