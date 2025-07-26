@@ -124,6 +124,9 @@ type Config struct {
 	AllowedOrigins []string
 	Subprotocols   []string
 
+	// Authentication (NEW)
+	CheckAuth func(r *http.Request) bool // Return true if authenticated, false otherwise
+
 	// Keep-alive
 	PingInterval   time.Duration
 	PongTimeout    time.Duration
@@ -170,6 +173,7 @@ func DefaultConfig() *Config {
 		CheckOrigin: func(r *http.Request) bool {
 			return true // Default: allow all origins (change for production)
 		},
+		CheckAuth: nil, // By default, no authentication check
 	}
 }
 
@@ -598,6 +602,11 @@ func (s *Server) validateHandshake(req *http.Request) error {
 	// Check origin if configured
 	if s.config.CheckOrigin != nil && !s.config.CheckOrigin(req) {
 		return ErrOriginNotAllowed
+	}
+
+	// Check authentication if configured (NEW)
+	if s.config.CheckAuth != nil && !s.config.CheckAuth(req) {
+		return ErrInvalidHandshake
 	}
 
 	return nil

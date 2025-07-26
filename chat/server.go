@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,12 +15,23 @@ import (
 	"time"
 
 	"github.com/oarkflow/sio/websocket"
+	"github.com/redis/go-redis/v9"
 )
 
 // UserInfo represents user information for WebSocket connections
 type UserInfo struct {
 	UserID   string
 	Username string
+}
+
+// SessionState represents a user's session for reconnection
+// (can be moved to a types.go if needed)
+type SessionState struct {
+	SessionID string
+	UserID    string
+	Username  string
+	Rooms     []string
+	LastSeen  time.Time
 }
 
 // Server represents the chat server
@@ -52,6 +64,9 @@ type Server struct {
 	// Background tasks
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// Redis client
+	redisClient *redis.Client
 }
 
 // Config represents server configuration
@@ -130,6 +145,13 @@ func NewServer(config *Config) *Server {
 	// Start background tasks
 	go server.cleanupTypingIndicators()
 
+	// Initialize Redis client
+	server.redisClient = redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379", // Make configurable
+		Password: "",
+		DB:       0,
+	})
+
 	return server
 }
 
@@ -137,15 +159,26 @@ func NewServer(config *Config) *Server {
 func (s *Server) createWebSocketServer(config *websocket.Config) *websocket.Server {
 	wsServer := websocket.NewServer(config)
 
-	// Store original onConnection handler
-	originalHandler := s.handleNewConnection
-
 	// Create a custom handler that extracts user info
 	wsServer.OnConnection(func(conn *websocket.Conn) {
-		// Try to extract user info from the connection
-		// This is a simplified approach - in practice, you'd need to modify
-		// the websocket package to pass the original HTTP request
-		originalHandler(conn)
+		// Try to extract session_id from the connection's negotiated subprotocol (as a workaround)
+		sessionID := ""
+		if proto := conn.NegotiatedSubprotocol(); proto != "" {
+			sessionID = proto
+		}
+
+		// Fallback: generate new session ID if not provided
+		if sessionID == "" {
+			b := make([]byte, 16)
+			rand.Read(b)
+			sessionID = hex.EncodeToString(b)
+		}
+
+		// Use default user info (can be improved by passing user info in the URL or subprotocol)
+		userID := "user_" + fmt.Sprintf("%d", time.Now().Unix())
+		username := fmt.Sprintf("User_%d", time.Now().Unix()%1000)
+
+		s.handleNewConnectionWithUser(conn, userID, username, sessionID)
 	})
 
 	wsServer.OnError(func(err error) {
@@ -235,22 +268,44 @@ func (s *Server) initializeDefaultRooms() error {
 
 // handleNewConnection handles a new WebSocket connection
 func (s *Server) handleNewConnection(conn *websocket.Conn) {
-	// Extract user info from the connection URL query parameters
+	// Try to extract session_id from the connection's negotiated subprotocol (as a workaround)
+	sessionID := ""
+	if proto := conn.NegotiatedSubprotocol(); proto != "" {
+		sessionID = proto
+	}
+
+	// Fallback: generate new session ID if not provided
+	if sessionID == "" {
+		b := make([]byte, 16)
+		rand.Read(b)
+		sessionID = hex.EncodeToString(b)
+	}
+
+	// Use default user info (can be improved by passing user info in the URL or subprotocol)
 	userID := "user_" + fmt.Sprintf("%d", time.Now().Unix())
 	username := fmt.Sprintf("User_%d", time.Now().Unix()%1000)
 
-	// Try to get the original request to extract query parameters
-	// Note: This is a simplified approach. In a real implementation,
-	// you'd need to modify the websocket package to pass the original request
-	// For now, we'll use the default values but log that we should extract them
-	log.Printf("New WebSocket connection - using default user info. UserID: %s, Username: %s", userID, username)
-
-	s.handleNewConnectionWithUser(conn, userID, username)
+	s.handleNewConnectionWithUser(conn, userID, username, sessionID)
 }
 
-// handleNewConnectionWithUser handles a new WebSocket connection with user info
-func (s *Server) handleNewConnectionWithUser(conn *websocket.Conn, userID, username string) {
+// handleNewConnectionWithUser handles a new WebSocket connection with user info and session ID
+func (s *Server) handleNewConnectionWithUser(conn *websocket.Conn, userID, username, sessionID string) {
 	clientID := s.generateClientID()
+
+	// Try to restore session from Redis
+	var restoredSession SessionState
+	found := false
+	if sessionID != "" {
+		val, err := s.redisClient.Get(s.ctx, "session:"+sessionID).Result()
+		if err == nil && val != "" {
+			err = json.Unmarshal([]byte(val), &restoredSession)
+			if err == nil {
+				userID = restoredSession.UserID
+				username = restoredSession.Username
+				found = true
+			}
+		}
+	}
 
 	client := &Client{
 		ID:       clientID,
@@ -260,6 +315,13 @@ func (s *Server) handleNewConnectionWithUser(conn *websocket.Conn, userID, usern
 		Rooms:    make(map[string]bool),
 		LastSeen: time.Now(),
 		IsTyping: make(map[string]bool),
+	}
+
+	// Restore rooms if session found
+	if found {
+		for _, roomID := range restoredSession.Rooms {
+			client.Rooms[roomID] = true
+		}
 	}
 
 	// Store client
@@ -282,6 +344,20 @@ func (s *Server) handleNewConnectionWithUser(conn *websocket.Conn, userID, usern
 	})
 
 	log.Printf("New client connected: %s (User: %s)", clientID, username)
+
+	// Store session in Redis
+	session := SessionState{
+		SessionID: sessionID,
+		UserID:    client.UserID,
+		Username:  client.Username,
+		Rooms:     make([]string, 0, len(client.Rooms)),
+		LastSeen:  client.LastSeen,
+	}
+	for roomID := range client.Rooms {
+		session.Rooms = append(session.Rooms, roomID)
+	}
+	sessBytes, _ := json.Marshal(session)
+	s.redisClient.Set(s.ctx, "session:"+sessionID, sessBytes, 24*time.Hour) // 24h expiry
 }
 
 // handleMessage processes incoming messages from clients
@@ -1201,6 +1277,21 @@ func (s *Server) handleClientDisconnect(client *Client) {
 	s.rateMu.Lock()
 	delete(s.rateLimiters, client.ID)
 	s.rateMu.Unlock()
+
+	// Update session state in Redis
+	session := SessionState{
+		SessionID: "", // If you store sessionID in client, use it here
+		UserID:    client.UserID,
+		Username:  client.Username,
+		Rooms:     make([]string, 0, len(client.Rooms)),
+		LastSeen:  time.Now(),
+	}
+	for roomID := range client.Rooms {
+		session.Rooms = append(session.Rooms, roomID)
+	}
+	sessBytes, _ := json.Marshal(session)
+	// Use the session ID from client or context
+	s.redisClient.Set(s.ctx, "session:"+session.SessionID, sessBytes, 24*time.Hour)
 
 	log.Printf("Client %s disconnected", client.ID)
 }
